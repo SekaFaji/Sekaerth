@@ -26,7 +26,7 @@ export const CORE_WARM_R = 48;  // the core is naturally warm within this radius
 
 export const T = {
   PENDING: -1, AIR: 0, ROCK: 1, GEM: 2, SAND: 4, HEARTH: 5,
-  ROOT: 6, FLOWER: 7, GRASS: 8, HARD: 10, OBSID: 11,
+  ROOT: 6, FLOWER: 7, GRASS: 8, HARD: 10, OBSID: 11, WORKBENCH: 12,
 } as const;
 
 const HARDNESS: Record<number, number> = {
@@ -34,7 +34,7 @@ const HARDNESS: Record<number, number> = {
   [T.FLOWER]: 1, [T.GRASS]: 2, [T.HARD]: 8, [T.OBSID]: 12,
 };
 export const diggable = (t: number) => t in HARDNESS;
-export const passable = (t: number) => t === T.AIR || t === T.HEARTH || t === T.FLOWER;
+export const passable = (t: number) => t === T.AIR || t === T.HEARTH || t === T.FLOWER || t === T.WORKBENCH;
 
 // per-block stats: hp (hits to break) and armor tier (pick required)
 export function blockStats(t: number, x: number, y: number, radius: number): { hp: number; tier: number } {

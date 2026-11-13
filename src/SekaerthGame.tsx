@@ -10,9 +10,11 @@ import { ITEMS, INVENTORY_SLOTS, HOTBAR_SLOTS, type Inventory, emptyInventory,
   normalizeInventory, cloneInventory, canAddItem, addItem, moveSlot, consumeSlot,
   dropForBlock, usedSlots, discardSlot } from "./items/inventory";
 import InventoryPanel, { ItemIcon } from "./ui/InventoryPanel";
+import { craftItem, RECIPES } from "./crafting/recipes";
+import { coldDrainMultiplier, digStrength, emptyEquipment, normalizeEquipment, equipFromBag, unequipToBag, type Equipment, type EquipmentSlot } from "./items/equipment";
 
 // ============================================================
-// SEKAERTH v3.4 — cozy dig-out-of-the-planet with selectable world sizes.
+// SEKAERTH v3.5 - cozy dig-out-of-the-planet with selectable world sizes.
 // 1 block = 1 meter. You start at the center of a round planet.
 // Terrain generates on demand so even Earth-scale coordinates don't
 // require allocating the planet upfront. Reach the sun to win.
@@ -128,6 +130,14 @@ function buildTileset(): Tileset {
     ctx.fillStyle = "#3c7a32";
     for (let i = 0; i < 6; i++) ctx.fillRect(Math.floor(Math.random() * 14), 5 + Math.floor(Math.random() * 4), 2, 2);
     ctx.fillStyle = "#7fd35f"; for (let x = 1; x < TILE; x += 5) ctx.fillRect(x, 1, 2, 3);
+  })];
+  set.workbench = [makeTile((ctx) => {
+    ctx.fillStyle = '#644c35'; ctx.fillRect(1, 6, 14, 5);
+    ctx.fillStyle = '#b98d5d'; ctx.fillRect(1, 4, 14, 3);
+    ctx.fillStyle = '#e1b27c'; ctx.fillRect(2, 4, 12, 1);
+    ctx.fillStyle = '#4d3525'; ctx.fillRect(3, 11, 2, 5); ctx.fillRect(11, 11, 2, 5);
+    ctx.fillStyle = '#dab582'; ctx.fillRect(4, 2, 7, 2);
+    ctx.fillStyle = '#7b5a40'; ctx.fillRect(7, 0, 2, 4);
   })];
   set.hearth = [makeTile((ctx) => {
     ctx.fillStyle = "#3a2a2a"; ctx.fillRect(0, 0, TILE, TILE);
@@ -331,6 +341,8 @@ export default function SekaerthGame() {
   const warmthRef = useRef(100);
   const gemsRef = useRef(0); // Existing gem currency stays separate from craftable crystal shards.
   const inventoryRef = useRef<Inventory>(emptyInventory());
+  const equipmentRef = useRef<Equipment>(emptyEquipment());
+  const [inventoryTab, setInventoryTab] = useState<"bag"|"craft"|"gear">("bag");
   const [, publishInventory] = useState(0);
   const [hotbarSlot, setHotbarSlot] = useState(0);
   const fullBagWarningRef = useRef<string | null>(null);
@@ -447,6 +459,7 @@ export default function SekaerthGame() {
       warmth: warmthRef.current, gems: gemsRef.current, time: timeRef.current,
       hearths: world.hearths.map((h) => ({ ...h })),
       inventory: cloneInventory(inventoryRef.current),
+      equipment: { ...equipmentRef.current },
     };
     setSavingState('saving');
     const next = saveQueueRef.current.catch(() => { /* previous failure remains visible */ }).then(async () => {
@@ -483,6 +496,7 @@ export default function SekaerthGame() {
       warmthRef.current = 100;
       gemsRef.current = 0;
       inventoryRef.current = emptyInventory();
+      equipmentRef.current = emptyEquipment();
       publishInventory((n) => n + 1);
       setHotbarSlot(0);
       fullBagWarningRef.current = null;
@@ -531,6 +545,7 @@ export default function SekaerthGame() {
       warmthRef.current = s.warmth;
       gemsRef.current = s.gems;
       inventoryRef.current = normalizeInventory(s.inventory);
+      equipmentRef.current = normalizeEquipment(s.equipment);
       publishInventory((n) => n + 1);
       setHotbarSlot(0);
       fullBagWarningRef.current = null;
@@ -633,19 +648,82 @@ export default function SekaerthGame() {
 
   // A consumable is the first real item interaction; later crafting can use the
   // same immutable inventory operations without coupling recipes to React.
-  const useWarmBloom = useCallback((slot: number) => {
+  const workbenchNearby = useCallback(() => {
+    const w = worldRef.current, p = playerRef.current;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      if (dx * dx + dy * dy <= 5 && w.get(p.x + dx, p.y + dy) === T.WORKBENCH) return true;
+    }
+    return false;
+  }, []);
+
+  const openBackpack = useCallback((tab: "bag" | "craft" | "gear") => {
+    setInventoryTab(tab);
+    setPhase('inventory');
+  }, []);
+
+  /** Consume items in inventory, or place a workbench using a real saved tile. */
+  const useInventoryItem = useCallback((slot: number) => {
     const stack = inventoryRef.current[slot];
-    if (!stack || stack.id !== 'bloom' || warmthRef.current >= 100) return;
+    if (!stack || !['bloom', 'warm_tonic', 'workbench_kit'].includes(stack.id)) return;
+    if (stack.id === 'workbench_kit') {
+      const w = worldRef.current, p = playerRef.current;
+      if (w.get(p.x, p.y) !== T.AIR) { say('STAND IN AN OPEN TILE TO PLACE A WORKBENCH'); return; }
+      const next = consumeSlot(inventoryRef.current, slot);
+      if (!next) return;
+      w.set(p.x, p.y, T.WORKBENCH);
+      inventoryRef.current = next;
+      publishInventory((n) => n + 1);
+      soundRef.current.hearth(); buzz(20);
+      setPhase('play');
+      say('WORKBENCH PLACED - CRAFT ADVANCED GEAR NEARBY');
+      void saveRun().catch(() => {});
+      return;
+    }
+    if (warmthRef.current >= 100) { say('WARMTH IS ALREADY FULL'); return; }
     const next = consumeSlot(inventoryRef.current, slot);
     if (!next) return;
     inventoryRef.current = next;
-    warmthRef.current = Math.min(100, warmthRef.current + 12);
+    const restored = stack.id === 'warm_tonic' ? 35 : 12;
+    warmthRef.current = Math.min(100, warmthRef.current + restored);
     publishInventory((n) => n + 1);
-    updateHud();
-    soundRef.current.hearth();
-    buzz(15);
-    say('WARM BLOOM USED - +12 WARMTH');
-  }, [say, buzz, updateHud]);
+    updateHud(); soundRef.current.hearth(); buzz(15);
+    say(`${ITEMS[stack.id].name.toUpperCase()} USED - +${restored} WARMTH`);
+    void saveRun().catch(() => {});
+  }, [say, buzz, updateHud, saveRun]);
+
+  const makeRecipe = useCallback((id: string) => {
+    const result = craftItem(inventoryRef.current, id, workbenchNearby());
+    if (!result.ok) {
+      const warning = { station: 'WORKBENCH REQUIRED', ingredients: 'MORE MATERIALS REQUIRED', space: 'NOT ENOUGH BACKPACK SPACE', recipe: 'UNKNOWN RECIPE' };
+      say(warning[result.reason]); return;
+    }
+    inventoryRef.current = result.inventory;
+    publishInventory((n) => n + 1);
+    const recipe = RECIPES.find((r) => r.id === id)!;
+    soundRef.current.hearth(); buzz(12);
+    say(`CRAFTED: ${recipe.name.toUpperCase()}`);
+    void saveRun().catch(() => {});
+  }, [workbenchNearby, saveRun, say, buzz]);
+
+  const equipItem = useCallback((slot: number) => {
+    const result = equipFromBag(inventoryRef.current, equipmentRef.current, slot);
+    if (!result) { say('CANNOT EQUIP THAT ITEM'); return; }
+    inventoryRef.current = result.inventory;
+    equipmentRef.current = result.equipment;
+    publishInventory((n) => n + 1); buzz(12);
+    say('GEAR EQUIPPED');
+    void saveRun().catch(() => {});
+  }, [say, buzz, saveRun]);
+
+  const unequipItem = useCallback((slot: EquipmentSlot) => {
+    const result = unequipToBag(inventoryRef.current, equipmentRef.current, slot);
+    if (!result) { say('BACKPACK FULL - CANNOT UNEQUIP'); return; }
+    inventoryRef.current = result.inventory;
+    equipmentRef.current = result.equipment;
+    publishInventory((n) => n + 1); buzz(12);
+    say('GEAR RETURNED TO BACKPACK');
+    void saveRun().catch(() => {});
+  }, [say, buzz, saveRun]);
 
   const moveInventory = useCallback((from: number, to: number) => {
     const next = moveSlot(inventoryRef.current, from, to);
@@ -696,10 +774,12 @@ export default function SekaerthGame() {
       keysRef.current[k] = true;
       soundRef.current.ensure();
       if ((k === 'i' || k === 'b') && !e.repeat) {
-        if (phase === 'play') { setPhase('inventory'); }
+        if (phase === 'play') { openBackpack('bag'); }
         else if (phase === 'inventory') { setPhase('play'); }
         return;
       }
+      if (k === 'c' && phase === 'play' && !e.repeat) { openBackpack('craft'); return; }
+      if (k === 'e' && phase === 'play' && !e.repeat) { openBackpack('gear'); return; }
       if (k === "h") placeHearth();
       if (k === "u") upgradePick();
       if (k === "escape") {
@@ -715,7 +795,7 @@ export default function SekaerthGame() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [phase, placeHearth, upgradePick, saveRun]);
+  }, [phase, placeHearth, upgradePick, saveRun, openBackpack]);
 
   // ----- sim tick -----
   useEffect(() => {
@@ -794,7 +874,7 @@ export default function SekaerthGame() {
                   life: 1, color: "#ffcf8b",
                 });
               // damage sticks to the block (Terraria-style), 10 visual states
-              const dm = w.addDmg(nx, ny, 1);
+              const dm = w.addDmg(nx, ny, digStrength(equipmentRef.current));
               if (dm % 2 === 0) soundRef.current.dig();
               if (dm >= st.hp) {
                 w.clearDmg(nx, ny);
@@ -827,7 +907,7 @@ export default function SekaerthGame() {
         r <= CORE_WARM_R ||
         w.hearths.some((h) => Math.hypot(h.x - p.x, h.y - p.y) <= WARM_RADIUS);
       const d = r / w.radius;
-      const delta = nearWarm ? 0.55 : -(0.015 + 0.08 * d);
+      const delta = nearWarm ? 0.55 : -(0.015 + 0.08 * d) * coldDrainMultiplier(equipmentRef.current);
       warmthRef.current = Math.min(100, Math.max(-1, warmthRef.current + delta));
 
       if (warmthRef.current <= 0) {
@@ -983,6 +1063,8 @@ export default function SekaerthGame() {
             ctx.drawImage(ts.grass[0], sx, sy);
           } else if (tt === T.HEARTH) {
             ctx.drawImage(ts.hearth[0], sx, sy);
+          } else if (tt === T.WORKBENCH) {
+            ctx.drawImage(ts.workbench[0], sx, sy);
           } else if (tt === T.HARD) {
             ctx.drawImage(ts.hard[0], sx, sy);
           } else if (tt === T.OBSID) {
@@ -1143,8 +1225,14 @@ export default function SekaerthGame() {
                   </div>
                 </div>
               </div>
+              <button type="button" onClick={() => openBackpack('craft')}
+                className="seka-plaque pointer-events-auto flex w-[50px] shrink-0 flex-col items-center justify-center text-[10px] font-bold tracking-wider text-amber-100 active:bg-amber-300/25"
+                aria-label="Open crafting recipes">
+                <span className="text-base leading-none">⚒</span>
+                <span className="mt-1 text-[8px]">CRAFT</span>
+              </button>
               <button
-                type="button" onClick={() => setPhase('inventory')}
+                type="button" onClick={() => openBackpack('bag')}
                 className="seka-plaque pointer-events-auto flex w-[50px] shrink-0 flex-col items-center justify-center text-[10px] font-bold tracking-wider text-amber-100 active:bg-amber-300/25"
                 aria-label={`Open backpack, ${hud.bag} of ${INVENTORY_SLOTS} slots filled`}
               >
@@ -1188,7 +1276,7 @@ export default function SekaerthGame() {
             {inventoryRef.current.slice(0, HOTBAR_SLOTS).map((stack, index) => (
               <button key={index} type="button" aria-pressed={hotbarSlot===index}
                 aria-label={`Quick slot ${index+1}: ${stack ? `${ITEMS[stack.id].name}, ${stack.count}` : 'Empty'}`}
-                onClick={() => { setHotbarSlot(index); if (stack?.id === 'bloom') useWarmBloom(index); }}
+                onClick={() => { setHotbarSlot(index); if (stack && ['bloom','warm_tonic','workbench_kit'].includes(stack.id)) useInventoryItem(index); }}
                 className={`relative flex h-[34px] w-[34px] items-center justify-center border ${hotbarSlot===index ? 'border-amber-200 bg-amber-300/25' : 'border-amber-200/25 bg-black/40'}`}>
                 <ItemIcon stack={stack} small />
                 {stack && <span className="absolute bottom-0 right-0 bg-black/70 px-[2px] text-[8px] text-white">{stack.count}</span>}
@@ -1241,9 +1329,12 @@ export default function SekaerthGame() {
           </>
         )}
 
-        {phase === 'inventory' && <InventoryPanel
+        {phase === 'inventory' && <InventoryPanel key={inventoryTab}
           inventory={inventoryRef.current} warmth={warmthRef.current}
-          onMove={moveInventory} onUse={useWarmBloom} onDiscard={discardInventory} onClose={() => setPhase('play')} />}
+          equipment={equipmentRef.current} nearWorkbench={workbenchNearby()} initialTab={inventoryTab}
+          onMove={moveInventory} onUse={useInventoryItem} onDiscard={discardInventory}
+          onEquip={equipItem} onUnequip={unequipItem} onCraft={makeRecipe}
+          onClose={() => setPhase('play')} />} 
 
         {/* Notifications stay clear of both thumbstick and action buttons. */}
         {toast && (
@@ -1418,6 +1509,10 @@ export default function SekaerthGame() {
               <li>U OR BUTTON — FORGE A BETTER PICK (COSTS GEMS).</li>
               <li>H OR BUTTON - PLANT A HEARTH (5 GEMS). WARM LIGHT. SAVE POINT.</li>
               <li>I / B OR BAG BUTTON - OPEN YOUR 24-SLOT BACKPACK.</li>
+              <li>C OR CRAFT BUTTON - CRAFT A WORKBENCH KIT AND WARM TONICS.</li>
+              <li>PLACE A WORKBENCH THEN RETURN TO CRAFTING FOR EQUIPMENT.</li>
+              <li>ROOT CLOAK SLOWS COLD LOSS. MINER'S GLOVES SPEED UP DIGGING.</li>
+              <li>E - OPEN EQUIPMENT. GEAR IS SAVED PER WORLD.</li>
               <li>TAP A STACK, THEN ANOTHER SLOT TO SWAP OR MERGE.</li>
               <li>THE FIRST 5 SLOTS MAKE UP THE QUICKBAR.</li>
               <li>MINED BLOCKS YIELD MATERIALS. WARM BLOOMS RESTORE WARMTH WHEN USED.</li>
@@ -1466,9 +1561,8 @@ export default function SekaerthGame() {
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-amber-300">Credits</h2>
             <p className="max-w-[16rem] font-mono text-[10px] leading-relaxed text-white/60">
-              SEKAERTH - a cozy ascent from the center of a little planet.
-              Vibe-coded in TypeScript with a hand-rolled pixel engine,
-              in the spirit of Sekampfire and Sekasma.
+              SEKAERTH - EXPLORE, MINE AND CRAFT YOUR WAY THROUGH A LIVING PLANET.
+              Developed by SekaFaji Games.
             </p>
             <p className="font-mono text-[9px] text-white/30">1 BLOCK = 1 M · SIX WORLD SIZES</p>
             <button className={btn} onClick={back}>◀ Back</button>

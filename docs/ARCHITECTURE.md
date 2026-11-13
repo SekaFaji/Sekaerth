@@ -65,3 +65,11 @@ Gem wallet currency remains independent from Crystal Shard items. A mining tick 
 - `persistence/`: world backups/import/export, transactional snapshot / backups, chunk payload compaction and mobile quota monitoring.
 
 Any new persistent gameplay field must have a default for migrated saves and a test for older save versions. No feature should require eagerly materializing an entire planet.
+
+## v3.5 crafting and equipment extension
+
+- `src/crafting/recipes.ts`: declarative recipe registry with explicit station requirements; pure atomic ingredient removal and capacity checks.
+- `src/items/equipment.ts`: two-slot equipment model, validated saved gear and pure equip/unequip operations; bonus helpers used by mining and warmth simulation.
+- `T.WORKBENCH`: a passable placed station persisted through the existing per-chunk terrain edit mechanism.
+- `src/ui/InventoryPanel.tsx`: shared bag/crafting/equipment overlay, isolated from world save internals.
+- `WorldSave.equipment` in metadata schema v6. v5 loads with empty slots; the IndexedDB database itself does not need a structural version bump.
