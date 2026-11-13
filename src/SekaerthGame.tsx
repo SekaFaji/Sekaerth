@@ -1,121 +1,33 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { gridStep, thumbVector, JOYSTICK_RADIUS, type Axes } from "./ui/joystick";
+import { World } from "./world/World";
+import { WORLD_SIZES, WORLD_SIZE_BY_ID, type WorldSize, distanceLabel, CHUNK, TILE, VIEW_W, VIEW_H,
+  TICK_MS, HEARTH_COST, WARM_RADIUS, CORE_WARM_R, T, diggable, passable,
+  blockStats, PICK_COST, PICK_NAME, biome, BIOME_KEYS, BIOME_ROCKS, hash2, shade } from "./world/terrain";
+import { SAVE_FORMAT, listWorlds, readWorld, readChunk, listModifiedKeys, writeWorld,
+  removeWorld, migrateLegacyWorld, newWorldId, storageEstimate, type WorldSave } from "./persistence/worldDb";
 
 // ============================================================
-// SEKAERTH v3.2 — cozy dig-out-of-the-planet with selectable world sizes.
+// SEKAERTH v3.3 — cozy dig-out-of-the-planet with selectable world sizes.
 // 1 block = 1 meter. You start at the center of a round planet.
 // Terrain generates on demand so even Earth-scale coordinates don't
 // require allocating the planet upfront. Reach the sun to win.
 // ============================================================
 
-// ---------- config ----------
-const WORLD_SIZES = [
-  { id: "tiny", label: "Tiny", radius: 1600, detail: "THE ORIGINAL POCKET PLANET", disc: 20 },
-  { id: "small", label: "Small", radius: 3200, detail: "A LITTLE MORE TO EXPLORE", disc: 27 },
-  { id: "medium", label: "Medium", radius: 6400, detail: "A LONGER ASCENT", disc: 34 },
-  { id: "large", label: "Large", radius: 12800, detail: "A VAST UNDERGROUND", disc: 41 },
-  { id: "huge", label: "Huge", radius: 25600, detail: "FOR ENDURANCE EXPLORERS", disc: 47 },
-  { id: "earth", label: "Real-Size Earth", radius: 6371000, detail: "TRUE EARTH RADIUS · EXTREME", disc: 54 },
-] as const;
-type WorldSize = (typeof WORLD_SIZES)[number]["id"];
-const WORLD_SIZE_BY_ID = Object.fromEntries(WORLD_SIZES.map((size) => [size.id, size])) as Record<WorldSize, (typeof WORLD_SIZES)[number]>;
-function distanceLabel(meters: number) {
-  if (meters < 1000) return `${meters} m`;
-  const km = meters / 1000;
-  return `${Number.isInteger(km) ? km.toLocaleString("en-US") : km.toFixed(1)} km`;
-}
-const CHUNK = 16;        // chunk size in tiles
-const TILE = 16;         // tile px on the internal surface
-const VIEW_W = 13;        // internal surface width in tiles
-const VIEW_H = 23;        // internal surface height in tiles
-const TICK_MS = 100;
-const HEARTH_COST = 5;
-const WARM_RADIUS = 7;   // hearth warm zone, meters
-const CORE_WARM_R = 48;  // the core is naturally warm within this radius
-const SAVE_RUN = "sekaerth-run-v1";
+// ---------- UI options ----------
 const SAVE_OPTS = "sekaerth-opts-v1";
-// Preserve existing Sunward saves and settings when upgrading to Sekaerth.
-const LEGACY_SAVE_RUN = "sunward-run-v1";
 const LEGACY_SAVE_OPTS = "sunward-opts-v1";
 const AUTOSAVE_TICKS = 50;
-
-const T = {
-  AIR: 0, ROCK: 1, GEM: 2, SAND: 4, HEARTH: 5,
-  ROOT: 6, FLOWER: 7, GRASS: 8, HARD: 10, OBSID: 11,
-} as const;
-
-const HARDNESS: Record<number, number> = {
-  [T.ROCK]: 4, [T.GEM]: 6, [T.SAND]: 1, [T.ROOT]: 2,
-  [T.FLOWER]: 1, [T.GRASS]: 2, [T.HARD]: 8, [T.OBSID]: 12,
-};
-const diggable = (t: number) => t in HARDNESS;
-const passable = (t: number) => t === T.AIR || t === T.HEARTH || t === T.FLOWER;
-
-// per-block stats: hp (hits to break) and armor tier (pick required)
-function blockStats(t: number, x: number, y: number, radius: number): { hp: number; tier: number } {
-  const d = Math.hypot(x, y) / radius;
-  if (t === T.HARD) return { hp: 8, tier: 2 };
-  if (t === T.OBSID) return { hp: 12, tier: 3 };
-  if (t === T.ROCK) return { hp: 4 + Math.round(6 * (1 - d)), tier: 1 };
-  if (t === T.GEM) return { hp: 6, tier: 1 };
-  if (t === T.ROOT) return { hp: 3, tier: 0 };
-  if (t === T.GRASS) return { hp: 2, tier: 0 };
-  return { hp: 1, tier: 0 }; // sand, flower
-}
-
-// pick progression
-const PICK_COST = [0, 0, 10, 25];
-const PICK_NAME = ["", "BASIC PICK", "STONE PICK", "CRYSTAL PICK"];
-
-// biome by depth fraction d = r/R (0 = core, 1 = surface)
-function biome(d: number) {
-  if (d < 0.03) return { name: "THE HEARTH", rock: "#7a3b40", sky: "#1c0b0e" };
-  if (d < 0.3) return { name: "IRON GARDEN", rock: "#566278", sky: "#0e1219" };
-  if (d < 0.55) return { name: "GEMWOOD", rock: "#5c4890", sky: "#12101f" };
-  if (d < 0.75) return { name: "THE SLOW SEA", rock: "#8a4a35", sky: "#1a0d08" };
-  if (d < 0.92) return { name: "THE ROOTWAYS", rock: "#70563e", sky: "#130d08" };
-  if (d < 0.998) return { name: "THE HOLLOW HALLS", rock: "#46586e", sky: "#0a0f18" };
-  return { name: "FIRST LIGHT", rock: "#6b5a3e", sky: "#7ec3ea" };
-}
-const BIOME_KEYS = ["THE HEARTH", "IRON GARDEN", "GEMWOOD", "THE SLOW SEA", "THE ROOTWAYS", "THE HOLLOW HALLS", "FIRST LIGHT"];
-const BIOME_ROCKS: Record<string, string> = {
-  "THE HEARTH": "#7a3b40", "IRON GARDEN": "#566278", "GEMWOOD": "#5c4890",
-  "THE SLOW SEA": "#8a4a35", "THE ROOTWAYS": "#70563e",
-  "THE HOLLOW HALLS": "#46586e", "FIRST LIGHT": "#6b5a3e",
-};
-
-// ---------- utils ----------
-function hash2(x: number, y: number) {
-  const n = Math.sin(x * 127.1 + y * 311.7 + 13.37) * 43758.5453;
-  return n - Math.floor(n);
-}
-function smooth(t: number) { return t * t * (3 - 2 * t); }
-function vnoise(x: number, y: number) {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const fx = smooth(x - xi), fy = smooth(y - yi);
-  const a = hash2(xi, yi), b = hash2(xi + 1, yi);
-  const c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
-  return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
-}
-function shade(hex: string, f: number) {
-  const r = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(1, 3), 16) * f)));
-  const g = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(3, 5), 16) * f)));
-  const b = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(5, 7), 16) * f)));
-  return `rgb(${r},${g},${b})`;
-}
 const store = {
   get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
-  del(k: string) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
-
-// Copy older branded saves to the new keys on first access, without deleting originals.
 function readStoredWithLegacy(key: string, legacyKey: string) {
   const existing = store.get(key);
   if (existing !== null) return existing;
-  const legacy = store.get(legacyKey);
-  if (legacy !== null) store.set(key, legacy);
-  return legacy;
+  const old = store.get(legacyKey);
+  if (old !== null) store.set(key, old);
+  return old;
 }
 
 // ---------- 3x5 pixel font ----------
@@ -285,148 +197,6 @@ const PLAYER_SPRITE = [
 const PLAYER_FLIP = PLAYER_SPRITE.map((r) => r.split("").reverse().join(""));
 const SPR: Record<string, string> = { Y: "#ffe08a", O: "#ff8c42", K: "#3a1a0a", R: "#c2410c" };
 
-// ---------- chunked round-planet world ----------
-class World {
-  readonly size: WorldSize;
-  readonly radius: number;
-  readonly seed: number;
-  // Chunk tiles are a working cache; permanent changes live in edits/dmg.
-  // Bounding the cache prevents Earth-scale journeys accumulating all tiles in RAM.
-  chunks = new Map<string, Int8Array>();
-  edits = new Map<string, Map<number, number>>();
-  dmg = new Map<string, Map<number, number>>();
-  hearths: { x: number; y: number }[] = [{ x: 0, y: 0 }];
-
-  constructor(size: WorldSize = "tiny", seed = 0) {
-    this.size = size;
-    this.radius = WORLD_SIZE_BY_ID[size].radius;
-    this.seed = seed;
-  }
-
-  key(cx: number, cy: number) { return cx + "," + cy; }
-
-  getDmg(x: number, y: number): number {
-    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
-    const m = this.dmg.get(this.key(cx, cy));
-    if (!m) return 0;
-    return m.get((y - cy * CHUNK) * CHUNK + (x - cx * CHUNK)) ?? 0;
-  }
-  addDmg(x: number, y: number, amount: number): number {
-    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
-    const k = this.key(cx, cy);
-    const i = (y - cy * CHUNK) * CHUNK + (x - cx * CHUNK);
-    let m = this.dmg.get(k);
-    if (!m) { m = new Map(); this.dmg.set(k, m); }
-    const v = (m.get(i) ?? 0) + amount;
-    m.set(i, v);
-    return v;
-  }
-  clearDmg(x: number, y: number) {
-    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
-    const m = this.dmg.get(this.key(cx, cy));
-    if (m) m.delete((y - cy * CHUNK) * CHUNK + (x - cx * CHUNK));
-  }
-
-  baseTile(x: number, y: number): number {
-    const r = Math.hypot(x, y);
-    if (r > this.radius + 1) return T.AIR;             // open sky
-    if (r >= this.radius - 2) return T.GRASS;          // grass shell
-    if (r < 12) return r === 0 ? T.HEARTH : T.AIR;     // core chamber
-    // protective shell near surface: fewer cave openings
-    const shell = r > this.radius - 24;
-    const sx = this.seed % 10007, sy = Math.floor(this.seed / 10007);
-    const n = 0.55 * vnoise(x / 34 + sx, y / 34 + sy) +
-      0.45 * vnoise(x / 11 + 100 + sx, y / 11 + 100 + sy);
-    if (n > (shell ? 0.72 : 0.6)) return T.AIR;
-    const d = r / this.radius;
-    const h = hash2(x + sx, y + sy);
-    const h2 = hash2(x * 3 + 7 + sx, y * 5 + 11 + sy);
-    if (d >= 0.05 && d < 0.5 && h2 < 0.1) return T.HARD;   // hardstone patches — need tier 2
-    if (d >= 0.3 && d < 0.6 && h2 > 0.94) return T.OBSID;  // obsidian shards — need tier 3
-    if (d >= 0.3 && d < 0.55 && h < 0.05) return T.GEM;
-    if (d >= 0.55 && d < 0.75 && h < 0.09) return T.SAND;
-    if (d >= 0.75 && d < 0.92 && h < 0.08) return T.ROOT;
-    if (d < 0.3 && h < 0.015) return T.FLOWER;
-    if (h > 0.996) return T.GEM;
-    return T.ROCK;
-  }
-
-  chunk(cx: number, cy: number): Int8Array {
-    const k = this.key(cx, cy);
-    let c = this.chunks.get(k);
-    if (c) return c;
-    c = new Int8Array(CHUNK * CHUNK);
-    for (let ly = 0; ly < CHUNK; ly++)
-      for (let lx = 0; lx < CHUNK; lx++)
-        c[ly * CHUNK + lx] = this.baseTile(cx * CHUNK + lx, cy * CHUNK + ly);
-    const ed = this.edits.get(k);
-    if (ed) for (const [i, t] of ed) c[i] = t;
-    for (const h of this.hearths) {
-      if (Math.floor(h.x / CHUNK) === cx && Math.floor(h.y / CHUNK) === cy)
-        c[(h.y - cy * CHUNK) * CHUNK + (h.x - cx * CHUNK)] = T.HEARTH;
-    }
-    this.chunks.set(k, c);
-    if (this.chunks.size > 512) {
-      const oldest = this.chunks.keys().next().value;
-      if (oldest !== undefined) this.chunks.delete(oldest);
-    }
-    return c;
-  }
-
-  get(x: number, y: number): number {
-    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
-    const c = this.chunk(cx, cy);
-    return c[(y - cy * CHUNK) * CHUNK + (x - cx * CHUNK)];
-  }
-  set(x: number, y: number, t: number) {
-    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
-    const k = this.key(cx, cy);
-    const c = this.chunk(cx, cy);
-    const i = (y - cy * CHUNK) * CHUNK + (x - cx * CHUNK);
-    c[i] = t;
-    let ed = this.edits.get(k);
-    if (!ed) { ed = new Map(); this.edits.set(k, ed); }
-    ed.set(i, t);
-  }
-
-  serialize() {
-    const edits: Record<string, Record<number, number>> = {};
-    for (const [k, m] of this.edits) {
-      const o: Record<number, number> = {};
-      for (const [i, t] of m) o[i] = t;
-      edits[k] = o;
-    }
-    const dmg: Record<string, Record<number, number>> = {};
-    for (const [k, m] of this.dmg) {
-      const o: Record<number, number> = {};
-      for (const [i, t] of m) o[i] = t;
-      dmg[k] = o;
-    }
-    return { edits, dmg, hearths: this.hearths };
-  }
-  loadEdits(
-    data: Record<string, Record<number, number>>,
-    dmgData: Record<string, Record<number, number>> | undefined,
-    hearths: { x: number; y: number }[],
-  ) {
-    this.edits.clear();
-    for (const k of Object.keys(data)) {
-      const m = new Map<number, number>();
-      for (const i of Object.keys(data[k])) m.set(Number(i), data[k][Number(i)]);
-      this.edits.set(k, m);
-    }
-    this.dmg.clear();
-    if (dmgData)
-      for (const k of Object.keys(dmgData)) {
-        const m = new Map<number, number>();
-        for (const i of Object.keys(dmgData[k])) m.set(Number(i), dmgData[k][Number(i)]);
-        this.dmg.set(k, m);
-      }
-    this.hearths = hearths;
-    this.chunks.clear();
-  }
-}
-
 // ---------- audio (procedural, sekampfire-style) ----------
 class Sound {
   ctx: AudioContext | null = null;
@@ -570,15 +340,23 @@ export default function SekaerthGame() {
   const digAnimRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const saveTickRef = useRef(0);
   const wonRef = useRef(false);
+  const activeWorldRef = useRef<{ id: string; name: string; createdAt: number } | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const storageBusyRef = useRef(false);
+  const [savingState, setSavingState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [worlds, setWorlds] = useState<WorldSave[]>([]);
+  const [loadingWorlds, setLoadingWorlds] = useState(true);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState('');
+  const [deleteWorldId, setDeleteWorldId] = useState<string | null>(null);
+  const [diskUsage, setDiskUsage] = useState<{ usage: number; quota: number } | null>(null);
 
-  type Phase = "title" | "world" | "howto" | "settings" | "credits" | "play" | "paused" | "win";
+  type Phase = "title" | "world" | "worlds" | "loading" | "howto" | "settings" | "credits" | "play" | "paused" | "win";
   const [phase, setPhase] = useState<Phase>("title");
   const [menuFrom, setMenuFrom] = useState<Phase>("title");
   const [hasSave, setHasSave] = useState(false);
   const [savedWorld, setSavedWorld] = useState<WorldSize | null>(null);
   const [selectedWorld, setSelectedWorld] = useState<WorldSize>("tiny");
-  const [confirmReplace, setConfirmReplace] = useState(false);
-  const [confirmErase, setConfirmErase] = useState(false);
   const [winStats, setWinStats] = useState({ gems: 0, time: 0, radius: 1600 });
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const [opts, setOpts] = useState<Opts>(() => {
@@ -619,85 +397,166 @@ export default function SekaerthGame() {
     });
   }, []);
 
-  // ----- persistence -----
-  const saveRun = useCallback(() => {
-    const p = playerRef.current;
-    const world = worldRef.current;
-    store.set(SAVE_RUN, JSON.stringify({
-      v: 3, size: world.size, seed: world.seed, won: wonRef.current,
-      px: p.x, py: p.y, facing: p.facing, pick: pickRef.current,
-      warmth: warmthRef.current, gems: gemsRef.current, time: timeRef.current,
-      ...world.serialize(),
-    }));
-    setHasSave(true);
-    setSavedWorld(world.size);
+  // ----- versioned, incremental, multiworld persistence -----
+  const refreshWorlds = useCallback(async () => {
+    try {
+      const list = await listWorlds();
+      setWorlds(list);
+      setHasSave(list.length > 0);
+      setSavedWorld(list[0]?.size ?? null);
+      setStorageError(null);
+      setDiskUsage(await storageEstimate());
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'World storage unavailable');
+    } finally { setLoadingWorlds(false); }
   }, []);
 
-  const newGame = useCallback((size: WorldSize) => {
-    // The random seed is saved, so visited terrain regenerates identically.
-    worldRef.current = new World(size, Math.floor(Math.random() * 1000000000));
-    playerRef.current = { x: 0, y: -1, facing: 1 };
-    renderRef.current = { x: 0, y: -TILE };
-    warmthRef.current = 100;
-    gemsRef.current = 0;
-    pickRef.current = 1;
-    timeRef.current = 0;
-    digRef.current = {};
-    particlesRef.current = [];
-    keysRef.current = {};
-    wonRef.current = false;
-    saveTickRef.current = 0;
-    setConfirmReplace(false);
-    updateHud();
-    saveRun(); // new world's initial state replaces the previous save immediately
-    setPhase("play");
-    say(`YOU WAKE AT THE CENTER OF A ${WORLD_SIZE_BY_ID[size].label.toUpperCase()} WORLD. ANY WAY OUT IS UP.`);
-  }, [say, saveRun, updateHud]);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try { await migrateLegacyWorld(); }
+      catch (error) {
+        if (!cancelled) setStorageError(error instanceof Error ? error.message : 'Old save import failed');
+      }
+      if (!cancelled) await refreshWorlds();
+    })();
+    return () => { cancelled = true; };
+  }, [refreshWorlds]);
 
-  const continueGame = useCallback(() => {
+  // Captures a consistent snapshot at the call site, queues atomic IDB writes,
+  // and acknowledges a chunk only if it has not changed since the snapshot.
+  const saveRun = useCallback((): Promise<void> => {
+    const active = activeWorldRef.current;
+    if (!active) return Promise.resolve();
+    const p = playerRef.current;
+    const world = worldRef.current;
+    const chunks = world.dirtyChunks();
+    const meta: WorldSave = {
+      v: SAVE_FORMAT, id: active.id, name: active.name, createdAt: active.createdAt,
+      updatedAt: Date.now(), size: world.size, seed: world.seed, won: wonRef.current,
+      px: p.x, py: p.y, facing: p.facing, pick: pickRef.current,
+      warmth: warmthRef.current, gems: gemsRef.current, time: timeRef.current,
+      hearths: world.hearths.map((h) => ({ ...h })),
+    };
+    setSavingState('saving');
+    const next = saveQueueRef.current.catch(() => { /* previous failure remains visible */ }).then(async () => {
+      await writeWorld(meta, chunks);
+      world.acknowledgeSaved(chunks);
+      setWorlds((previous) => [meta, ...previous.filter((item) => item.id !== meta.id)]
+        .sort((a, b) => b.updatedAt - a.updatedAt));
+      setHasSave(true);
+      setSavedWorld(meta.size);
+      setSavingState('saved');
+    });
+    saveQueueRef.current = next.catch((error) => {
+      console.error('Sekaerth autosave failed', error);
+      setStorageError(error instanceof Error ? error.message : 'World save failed');
+      setSavingState('error');
+      throw error;
+    });
+    return saveQueueRef.current;
+  }, []);
+
+  const newGame = useCallback(async (size: WorldSize) => {
+    if (storageBusyRef.current) return;
+    storageBusyRef.current = true;
+    setPhase('loading');
     try {
-      const raw = readStoredWithLegacy(SAVE_RUN, LEGACY_SAVE_RUN);
-      if (!raw) return;
-      const s = JSON.parse(raw);
-      // Version 2 saves had a fixed 1,600 m world and no procedural seed.
-      const size: WorldSize = typeof s.size === "string" && Object.prototype.hasOwnProperty.call(WORLD_SIZE_BY_ID, s.size)
-        ? s.size as WorldSize : "tiny";
-      worldRef.current = new World(size, Number.isSafeInteger(s.seed) ? s.seed : 0);
-      worldRef.current.loadEdits(s.edits ?? {}, s.dmg, s.hearths ?? [{ x: 0, y: 0 }]);
-      playerRef.current = { x: s.px, y: s.py, facing: s.facing ?? 1 };
-      renderRef.current = { x: s.px * TILE, y: s.py * TILE };
+      await saveQueueRef.current;
+      const timestamp = Date.now();
+      const name = selectedName.trim().slice(0, 32) || `World ${worlds.length + 1}`;
+      const id = newWorldId();
+      worldRef.current = new World(size, Math.floor(Math.random() * 1000000000));
+      activeWorldRef.current = { id, name, createdAt: timestamp };
+      playerRef.current = { x: 0, y: -1, facing: 1 };
+      renderRef.current = { x: 0, y: -TILE };
+      warmthRef.current = 100;
+      gemsRef.current = 0;
+      pickRef.current = 1;
+      timeRef.current = 0;
+      digRef.current = {};
+      particlesRef.current = [];
+      keysRef.current = {};
+      wonRef.current = false;
+      saveTickRef.current = 0;
+      await saveRun(); // world exists durably before player starts editing
+      updateHud();
+      setPhase('play');
+      say(`WELCOME TO ${name.toUpperCase()}. YOUR ASCENT BEGINS!`);
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'Could not create world');
+      setPhase('world');
+      say('WORLD COULD NOT BE SAVED. PLEASE CHECK STORAGE.');
+    } finally { storageBusyRef.current = false; }
+  }, [worlds.length, selectedName, say, saveRun, updateHud]);
+
+  const continueGame = useCallback(async (id?: string) => {
+    if (storageBusyRef.current) return;
+    storageBusyRef.current = true;
+    setPhase('loading');
+    try {
+      await saveQueueRef.current;
+      const activeId = id ?? worlds[0]?.id;
+      if (!activeId) throw new Error('No saved world found');
+      const s = await readWorld(activeId);
+      if (!s) throw new Error('World not found');
+      const size: WorldSize = WORLD_SIZE_BY_ID[s.size] ? s.size : 'tiny';
+      const world = new World(size, Number.isSafeInteger(s.seed) ? s.seed : 0);
+      world.hearths = Array.isArray(s.hearths) && s.hearths.length ? s.hearths : [{ x: 0, y: 0 }];
+      const keys = await listModifiedKeys(s.id);
+      world.connectStorage(keys, (key) => readChunk(s.id, key));
+      const px = Number.isSafeInteger(s.px) ? s.px : 0;
+      const py = Number.isSafeInteger(s.py) ? s.py : -1;
+      // Load edits around the spawn before allowing mining or falling sand.
+      await world.preload(Math.floor(px / CHUNK), Math.floor(py / CHUNK), 2);
+      if (world.hasReadError()) throw new Error('One or more world chunks could not be loaded');
+      worldRef.current = world;
+      activeWorldRef.current = { id: s.id, name: s.name, createdAt: s.createdAt };
+      playerRef.current = { x: px, y: py, facing: s.facing ?? 1 };
+      renderRef.current = { x: px * TILE, y: py * TILE };
       warmthRef.current = s.warmth;
       gemsRef.current = s.gems;
       pickRef.current = s.pick ?? 1;
       timeRef.current = s.time ?? 0;
       digRef.current = {};
       keysRef.current = {};
-      wonRef.current = typeof s.won === "boolean" ? s.won : Math.hypot(s.px, s.py) >= worldRef.current.radius - 2;
+      wonRef.current = Boolean(s.won);
       saveTickRef.current = 0;
       updateHud();
-      setPhase("play");
-      say("THE ROCK REMEMBERS YOU.");
-    } catch { say("SAVE WAS CORRUPTED. START A NEW ASCENT."); }
-  }, [say, updateHud]);
+      setPhase('play');
+      say('THE ROCK REMEMBERS YOU.');
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'World could not be loaded');
+      setPhase('worlds');
+      say('WORLD FAILED TO LOAD. NO SAVES WERE DELETED.');
+    } finally { storageBusyRef.current = false; }
+  }, [worlds, say, updateHud]);
+
+  const eraseWorld = useCallback(async (id: string) => {
+    if (storageBusyRef.current) return;
+    storageBusyRef.current = true;
+    try {
+      await saveQueueRef.current;
+      await removeWorld(id);
+      if (activeWorldRef.current?.id === id) activeWorldRef.current = null;
+      setDeleteWorldId(null);
+      await refreshWorlds();
+      say('WORLD DELETED.');
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'Could not delete world');
+      say('WORLD DELETE FAILED.');
+    } finally { storageBusyRef.current = false; }
+  }, [refreshWorlds, say]);
 
   useEffect(() => {
-    const raw = readStoredWithLegacy(SAVE_RUN, LEGACY_SAVE_RUN);
-    setHasSave(!!raw);
-    if (raw) {
-      try {
-        const stored = JSON.parse(raw);
-        const size: WorldSize = typeof stored.size === "string" &&
-          Object.prototype.hasOwnProperty.call(WORLD_SIZE_BY_ID, stored.size)
-          ? stored.size as WorldSize : "tiny";
-        setSavedWorld(size);
-      } catch { setSavedWorld(null); }
-    }
-  }, []);
-
-  useEffect(() => {
-    const onLeave = () => { if (phase === "play" || phase === "paused") saveRun(); };
-    window.addEventListener("beforeunload", onLeave);
-    return () => window.removeEventListener("beforeunload", onLeave);
+    const saveOnHidden = () => { if (phase === 'play' || phase === 'paused') void saveRun().catch(() => {}); };
+    window.addEventListener('pagehide', saveOnHidden);
+    const onVisibility = () => { if (document.hidden) saveOnHidden(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', saveOnHidden);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [phase, saveRun]);
 
   // ----- input -----
@@ -790,7 +649,7 @@ export default function SekaerthGame() {
       if (k === "h") placeHearth();
       if (k === "u") upgradePick();
       if (k === "escape") {
-        if (phase === "play") { setPhase("paused"); saveRun(); }
+        if (phase === "play") { setPhase("paused"); void saveRun().catch(() => {}); }
         else if (phase === "paused") setPhase("play");
       }
     };
@@ -881,7 +740,8 @@ export default function SekaerthGame() {
       }
 
       // warmth — colder toward the surface
-      const r = Math.hypot(p.x, p.y);      const nearWarm =
+      const r = Math.hypot(p.x, p.y);
+      const nearWarm =
         r <= CORE_WARM_R ||
         w.hearths.some((h) => Math.hypot(h.x - p.x, h.y - p.y) <= WARM_RADIUS);
       const d = r / w.radius;
@@ -925,20 +785,23 @@ export default function SekaerthGame() {
       // win: reach the grass shell (once — sandbox continues afterwards)
       if (r >= w.radius - 2 && !wonRef.current) {
         wonRef.current = true;
-        saveRun();
+        void saveRun().catch(() => {});
         setWinStats({ gems: gemsRef.current, time: timeRef.current, radius: w.radius });
         soundRef.current.win();
         setPhase("win");
         return;
       }
 
+      if (w.hasReadError()) {
+        setStorageError('Some edited chunks failed to load. Movement is blocked in those areas.');
+      }
       // Native-style UI reads live game state, never independently simulates stats.
       updateHud();
 
       // autosave
       if (++saveTickRef.current >= AUTOSAVE_TICKS) {
         saveTickRef.current = 0;
-        saveRun();
+        void saveRun().catch(() => {});
       }
     }, TICK_MS);
     return () => clearInterval(interval);
@@ -1019,6 +882,11 @@ export default function SekaerthGame() {
         for (let x = x0; x <= x0 + VIEW_W + 1; x++) {
           const tt = w.get(x, y);
           if (tt === T.AIR) continue;
+          if (tt === T.PENDING) {
+            ctx.fillStyle = '#100e17';
+            ctx.fillRect(Math.round(x * TILE - camX), Math.round(y * TILE - camY), TILE, TILE);
+            continue;
+          }
           const sx = Math.round(x * TILE - camX), sy = Math.round(y * TILE - camY);
           const bd = Math.hypot(x, y) / w.radius;
           const b = biome(bd);
@@ -1151,7 +1019,7 @@ export default function SekaerthGame() {
   const goMenu = (m: Phase, from: Phase) => { setMenuFrom(from); setPhase(m); soundRef.current.ui(); };
   const back = () => { soundRef.current.ui(); setPhase(menuFrom === "paused" ? "paused" : "title"); };
   const togglePause = () => {
-    if (phase === "play") { saveRun(); setPhase("paused"); }
+    if (phase === "play") { void saveRun().catch(() => {}); setPhase("paused"); }
     else if (phase === "paused") setPhase("play");
   };
   const fullscreen = () => {
@@ -1221,6 +1089,9 @@ export default function SekaerthGame() {
           </div>
         )}
 
+        {phase === 'play' && <div className="pointer-events-none absolute right-3 top-[115px] z-20 font-mono text-[8px] text-amber-100/70">
+          {savingState === 'saving' ? 'SAVING...' : savingState === 'error' ? 'SAVE ERROR' : savingState === 'saved' ? 'SAVED' : ''}
+        </div>}
         {/* Drag thumb to move and automatically dig, like the Cursed Project movement thumb. */}
         {phase === "play" && (
           <>
@@ -1289,14 +1160,16 @@ export default function SekaerthGame() {
               </p>
             </div>
             <div className="mt-8 flex flex-col gap-2">
-              {hasSave && <button className={btn} onClick={() => { soundRef.current.ensure(); continueGame(); }}>Continue{savedWorld ? ` - ${WORLD_SIZE_BY_ID[savedWorld].label}` : ""}</button>}
-              <button className={btn} onClick={() => { setSelectedWorld("tiny"); setConfirmReplace(false); setPhase("world"); soundRef.current.ui(); }}>New Ascent</button>
+              {!loadingWorlds && hasSave && <button className={btn} onClick={() => { soundRef.current.ensure(); void continueGame(); }}>Continue{savedWorld ? ` - ${WORLD_SIZE_BY_ID[savedWorld].label}` : ""}</button>}
+              <button className={btn} disabled={loadingWorlds} onClick={() => { setPhase('worlds'); void refreshWorlds(); }}>My Worlds ({worlds.length})</button>
+              <button className={btn} disabled={loadingWorlds || !!storageError} onClick={() => { setSelectedWorld("tiny"); setSelectedName(""); setPhase("world"); soundRef.current.ui(); }}>New Ascent</button>
               <button className={btn} onClick={() => goMenu("howto", "title")}>How to Play</button>
               <button className={btn} onClick={() => goMenu("settings", "title")}>Settings</button>
               <button className={btn} onClick={() => goMenu("credits", "title")}>Credits</button>
             </div>
+            {storageError && <p role="alert" className="mt-3 max-w-[290px] text-center font-mono text-[9px] text-rose-200">Storage: {storageError}</p>}
             <p className="mt-8 font-mono text-[8px] uppercase tracking-widest text-white/25">
-              v3.1 · six planet sizes · pocket to earth
+              v3.3 · multiworld saves · chunk storage
             </p>
           </div>
         )}
@@ -1306,7 +1179,7 @@ export default function SekaerthGame() {
           <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-[#0b0a12]/95 px-4 py-5 text-center sm:px-6">
             <button
               className="self-start font-mono text-[10px] uppercase tracking-widest text-amber-200/75"
-              onClick={() => { setConfirmReplace(false); setPhase("title"); }}
+              onClick={() => setPhase("title")}
             >
               ◀ Main Menu
             </button>
@@ -1320,7 +1193,7 @@ export default function SekaerthGame() {
                     key={size.id}
                     type="button"
                     aria-pressed={active}
-                    onClick={() => { setSelectedWorld(size.id); setConfirmReplace(false); soundRef.current.ui(); }}
+                    onClick={() => { setSelectedWorld(size.id); soundRef.current.ui(); }}
                     className={`flex min-h-[122px] flex-col items-center justify-center gap-1 border p-2 text-center transition-colors ${active ? "border-amber-300 bg-amber-500/20" : "border-white/15 bg-white/5 hover:bg-white/10"}`}
                   >
                     <div
@@ -1344,19 +1217,66 @@ export default function SekaerthGame() {
                 ? "EARTH MODE USES THE REAL 6,371 KM RADIUS. WITH 1 METER BLOCKS THIS IS AN EXPERIMENTAL, EXTREMELY LONG ASCENT."
                 : `RADIUS ${distanceLabel(WORLD_SIZE_BY_ID[selectedWorld].radius)}. TERRAIN GENERATES AS YOU EXPLORE. EVERY DIRECTION LEADS OUTWARD.`}
             </div>
-            {hasSave && (
-              <p className="mt-2 font-mono text-[9px] text-rose-200/90">WARNING: STARTING A NEW WORLD WILL REPLACE YOUR CURRENT SAVE.</p>
-            )}
-            <button
-              className={btn + " mt-3 w-full border-amber-300/60 bg-amber-500/20 font-bold"}
-              onClick={() => {
-                if (hasSave && !confirmReplace) { setConfirmReplace(true); return; }
-                soundRef.current.ensure();
-                newGame(selectedWorld);
-              }}
-            >
-              {confirmReplace ? "Confirm - Replace Save" : `Begin ${WORLD_SIZE_BY_ID[selectedWorld].label} Ascent`}
+            <label className="mt-3 flex flex-col gap-1 text-left font-mono text-[9px] uppercase tracking-wider text-amber-100/70">
+              World Name (optional)
+              <input type="text" maxLength={32} autoComplete="off" value={selectedName}
+                placeholder={`World ${worlds.length + 1}`}
+                onChange={(event) => setSelectedName(event.currentTarget.value)}
+                className="w-full border border-amber-300/25 bg-black/45 px-3 py-2 text-[12px] text-amber-50 outline-none focus:border-amber-300/70" />
+            </label>
+            <p className="mt-2 font-mono text-[9px] text-amber-100/55">YOUR NEW WORLD GETS ITS OWN SAVE SLOT. NO EXISTING WORLDS WILL BE REPLACED.</p>
+            <button className={btn + " mt-3 w-full border-amber-300/60 bg-amber-500/20 font-bold"}
+              disabled={loadingWorlds || !!storageError}
+              onClick={() => { soundRef.current.ensure(); void newGame(selectedWorld); }}>
+              Begin {WORLD_SIZE_BY_ID[selectedWorld].label} Ascent
             </button>
+            {storageError && <p role="alert" className="mt-2 font-mono text-[10px] text-red-200">STORAGE ERROR: {storageError}</p>}
+          </div>
+        )}
+
+        {/* ================= SAVED WORLDS ================= */}
+        {phase === 'worlds' && (
+          <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-[#0b0a12]/95 px-5 py-5 font-mono">
+            <button className="self-start text-[10px] uppercase tracking-widest text-amber-200/75"
+              onClick={() => { setDeleteWorldId(null); setPhase('title'); }}>◀ Main Menu</button>
+            <h2 className="mt-4 text-center text-lg font-bold uppercase tracking-widest text-amber-300">My Worlds</h2>
+            <p className="mt-2 text-center text-[9px] leading-relaxed text-amber-100/50">EACH PLANET SAVES INDEPENDENTLY. WORLD CHANGES LOAD IN CHUNKS.</p>
+            {loadingWorlds && <p className="mt-8 text-center text-amber-100/60">READING WORLDS...</p>}
+            {!loadingWorlds && worlds.length === 0 && <p className="mt-8 text-center text-amber-100/60">NO WORLDS YET. CREATE YOUR FIRST PLANET!</p>}
+            <div className="mt-4 flex flex-col gap-3">
+              {worlds.map((world) => (
+                <div key={world.id} className="seka-plaque flex flex-col gap-2 px-3 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-[13px] font-bold uppercase text-amber-100">{world.name}</p>
+                      <p className="mt-1 text-[9px] text-amber-100/65">{WORLD_SIZE_BY_ID[world.size]?.label ?? 'Tiny'} · {distanceLabel(Math.round(Math.hypot(world.px, world.py)))} from core</p>
+                    </div>
+                    <span className="shrink-0 text-[8px] text-amber-100/50">{new Date(world.updatedAt).toLocaleDateString()}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button className={btn + ' flex-1'} onClick={() => void continueGame(world.id)}>Play World</button>
+                    <button className="border border-rose-300/30 bg-rose-950/30 px-3 text-[10px] text-rose-200"
+                      onClick={() => setDeleteWorldId(deleteWorldId === world.id ? null : world.id)}>
+                      {deleteWorldId === world.id ? 'Cancel' : 'Delete'}</button>
+                  </div>
+                  {deleteWorldId === world.id && (
+                    <button className="border border-red-300/60 bg-red-800/35 p-2 text-[10px] uppercase text-red-100"
+                      onClick={() => void eraseWorld(world.id)}>Confirm - Delete This World Permanently</button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {diskUsage && <p className="mt-4 text-center text-[9px] text-amber-100/50">BROWSER STORAGE: {(diskUsage.usage / (1024 * 1024)).toFixed(1)} MB USED {diskUsage.quota ? `/ ${(diskUsage.quota / (1024 * 1024)).toFixed(0)} MB AVAILABLE QUOTA` : ''}</p>}
+            {storageError && <p role="alert" className="mt-4 text-center text-[10px] text-red-200">{storageError}</p>}
+            <button className={btn + ' mt-4'} onClick={() => { setSelectedName(''); setSelectedWorld('tiny'); setPhase('world'); }}>Create Another World</button>
+          </div>
+        )}
+
+        {phase === 'loading' && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/85 font-mono text-amber-100">
+            <span className="text-xl">✦</span>
+            <p className="text-[12px] uppercase tracking-widest">Preparing Your Planet...</p>
+            <p className="text-[9px] text-amber-100/60">Loading terrain and world changes</p>
           </div>
         )}
 
@@ -1368,7 +1288,9 @@ export default function SekaerthGame() {
               <button className={btn} onClick={togglePause}>Resume</button>
               <button className={btn} onClick={() => goMenu("settings", "paused")}>Settings</button>
               <button className={btn} onClick={() => goMenu("howto", "paused")}>How to Play</button>
-              <button className={btn} onClick={() => { saveRun(); setPhase("title"); }}>Save + Quit to Title</button>
+              <button className={btn} onClick={() => {
+                void saveRun().then(() => setPhase('title')).catch(() => say('SAVE FAILED. STAYING IN WORLD.'));
+              }}>Save + Quit to Title</button>
             </div>
           </div>
         )}
@@ -1386,7 +1308,9 @@ export default function SekaerthGame() {
               <li>BLOCKS HAVE HP — DAMAGE STICKS (10 STATES).</li>
               <li>GRAY HARDSTONE NEEDS TIER 2, OBSIDIAN TIER 3.</li>
               <li>U OR BUTTON — FORGE A BETTER PICK (COSTS GEMS).</li>
-              <li>H OR BUTTON — PLANT A HEARTH (5 GEMS). WARM LIGHT. SAVE POINT.</li>
+              <li>H OR BUTTON - PLANT A HEARTH (5 GEMS). WARM LIGHT. SAVE POINT.</li>
+              <li>EACH PLANET HAS ITS OWN NAME AND SAVE SLOT.</li>
+              <li>WORLD CHANGES AUTOSAVE IN SEPARATE CHUNK RECORDS.</li>
               <li>HEARTHS REFILL WARMTH. COLD = NAP.</li>
               <li>REACH THE GRASS RING. SEE THE SUN. WIN.</li>
             </ul>
@@ -1417,22 +1341,11 @@ export default function SekaerthGame() {
               <button className={btn} onClick={() => setOpts((o) => ({ ...o, haptic: !o.haptic }))}>
                 Haptics: {opts.haptic ? "On" : "Off"}
               </button>
-              <button
-                className={confirmErase ? "border-red-400/60 bg-red-500/20 font-mono text-[11px] uppercase tracking-[0.2em] text-red-200 px-5 py-2.5" : btn}
-                onClick={() => {
-                  if (!confirmErase) { setConfirmErase(true); return; }
-                  store.del(SAVE_RUN);
-                  store.del(LEGACY_SAVE_RUN);
-                  setHasSave(false);
-                  setSavedWorld(null);
-                  setConfirmErase(false);
-                  say("SAVE ERASED");
-                }}
-              >
-                {confirmErase ? "Press Again to Confirm" : "Erase Save"}
-              </button>
+              <p className="border border-amber-200/15 bg-amber-950/20 p-3 text-[10px] leading-relaxed text-amber-100/70">
+                Your worlds now save separately. Manage or delete them from My Worlds on the main menu.
+              </p>
             </div>
-            <button className={btn} onClick={() => { setConfirmErase(false); back(); }}>◀ Back</button>
+            <button className={btn} onClick={back}>◀ Back</button>
           </div>
         )}
 

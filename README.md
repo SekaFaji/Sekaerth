@@ -1,10 +1,23 @@
 # Sekaerth 🌍
 
-**Sekaerth** is a cozy, pixel-art planet exploration game. Start at the warm center of a procedurally generated world, mine your way outward, gather gems, build hearths, upgrade your pickaxe and reach the sunlight.
+**Sekaerth** is a cozy, pixel-art planet exploration game. Start at the warm heart of a procedurally generated planet, mine outward, upgrade your pickaxe, place hearths and eventually reach the sunlight. Inspired by 2D sandbox exploration games, with mobile-first thumb movement.
 
-The project was originally prototyped as *Sunward* and renamed to **Sekaerth** for the Seka game collection.
+**Play:** https://sekafaji.github.io/Sekaerth/
 
-## Choose your world
+## v3.3 - foundation and world saves
+
+- Create **multiple named worlds**, each with its own seed, player, hearths and block changes.
+- A separate **IndexedDB world database** replaces the old single large localStorage run blob.
+- Each altered 16×16 chunk is persisted independently. Pristine terrain is regenerated deterministically from the saved seed, not stored.
+- **Incremental saves** write only changed chunks plus the small world metadata record in one transaction. Failed writes retain dirty chunks for retry.
+- Only modified chunk **keys** are indexed on loading a world; modified content is read lazily as the player approaches. Blocks are temporarily blocked while their saved changes load, never replaced with pristine terrain.
+- Terrain generation, world state and persistence are now in separate modules for future inventory, crafting and structures.
+- The first launch attempts a **non-destructive import** from the former `sekaerth-run-v1`/`sunward-run-v1` save. The old browser save is not deleted.
+- The pause menu saves before returning to the title, and world deletion requires confirmation.
+
+**Caveat:** IndexedDB is browser- and origin-specific. Clearing site data, changing domains, or uninstalling browsers can remove it. World import/export and backups are planned, not yet implemented. Avoid clearing site data until backup export exists.
+
+## World sizes
 
 | World | Radius | Diameter |
 | --- | ---: | ---: |
@@ -15,44 +28,36 @@ The project was originally prototyped as *Sunward* and renamed to **Sekaerth** f
 | Huge | 25.6 km | 51.2 km |
 | Real-Size Earth | 6,371 km | 12,742 km |
 
-Each block represents one meter. Terrain is generated in chunks on demand rather than allocating an entire planet up front. World choice affects the planet radius, depth-based biome transitions and progression distance. **Real-Size Earth is an experimental endurance setting**, not a claim of realistic geology or a fully populated Earth map.
-
-## Play
-
-Once GitHub Pages has been enabled with **Settings → Pages → Build and deployment → GitHub Actions**, the game is intended to deploy to:
-
-https://sekafaji.github.io/Sekaerth/
+One block represents one meter. Real-Size Earth is experimental: planet dimensions are Earth-scale, but geology and travel speed are not realistically simulated.
 
 ## Development
 
-Requires Node.js 20 or later.
+Requires Node.js 22 or later.
 
 ```sh
 npm install
+npm run test
+npm run typecheck
 npm run dev
-npm test
 npm run build
 ```
 
-The game runs as a React/TypeScript component in `src/SekaerthGame.tsx`, built with Vite and Tailwind CSS. The deployment workflow in `.github/workflows/pages.yml` publishes `dist/` on pushes to `main` after Pages is enabled.
+Production deployment is handled by `.github/workflows/pages.yml` on `main`. Enable **Settings → Pages → Build and deployment → GitHub Actions** if deployment has not been configured.
 
-## Controls and HUD
+## Controls
 
-On phones, drag the circular movement thumbstick at bottom-left to walk or hold against rock to dig. The thumbstick has a small dead zone, supports diagonals and safely stops when you release or switch apps. The right-side circular **Forge** and **Hearth** buttons upgrade your pick (10 and 25 gems) or place a hearth (5 gems).
+Move and automatically dig using the touchscreen thumbstick or WASD/arrow keys. Tap **FORGE** (or U) to improve your pickaxe, **HEARTH** (or H) to plant a warm checkpoint, and **MENU** (or Esc) to pause.
 
-On keyboards, move/dig with **WASD** or arrow keys. Upgrade the pickaxe with **U**, place a hearth with **H**, and pause with **Esc**.
+## Architecture and persistence
 
-The top HUD uses warm translucent timber plaques inspired by Sekampfire. It shows the live biome, world size, distance from the core, direction and distance to sunlight, warmth, gems, pickaxe tier and the Menu button.
+Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module responsibilities, transaction semantics, chunk hydration, migration rules and extension points.
 
-The movement thumb uses the Cursed Project restoration as a *behavioral reference* (dead zone, capped thumb displacement and drag control). The Sekaerth art and UI are distinct and its grid-based diagonal movement avoids passing through solid corners.
+Next planned systems: item definitions, inventory, resource drops, crafting recipes, equipment and block placement. These are **not yet implemented** in v3.3.
 
+## Known limitations
 
-## Saves
-
-Runs and settings are saved locally in your browser. The game migrates legacy `sunward-*` storage keys to `sekaerth-*` when it runs on the **same website origin**. Browser storage is not shared across different domains, so an older deployment's progress cannot automatically move to GitHub Pages.
-
-Starting a new world replaces the current single save slot; a confirmation is shown. World-size selection and existing save compatibility were added in v3.1.
-
-## Project status
-
-Early playable prototype. v3.2 adds a Sekampfire-inspired HUD and a Cursed Project-inspired analog touch control in place of the four arrow buttons. Large worlds are mathematically scalable, but richer exploration content, balancing and game-length tuning remain future work.
+- Saves are per browser origin, not cloud-synced.
+- World backup/export has not been implemented. Browser storage is not a permanent archive.
+- A very large number of modified chunks makes the modified-chunk key index large; further profiling and storage optimization will be needed for extreme playthroughs.
+- Other gameplay and graphics still live in the original monolithic React component, pending incremental extraction.
+- Large world sizes need progression balancing and more content before they become enjoyable full-length sandbox experiences.
