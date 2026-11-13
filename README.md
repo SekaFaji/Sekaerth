@@ -1,5 +1,7 @@
 # Sekaerth 🌍
 
+**Current version: 3.4 - Inventory and resource collection.**
+
 **Sekaerth** is a cozy, pixel-art planet exploration game. Start at the warm heart of a procedurally generated planet, mine outward, upgrade your pickaxe, place hearths and eventually reach the sunlight. Inspired by 2D sandbox exploration games, with mobile-first thumb movement.
 
 **Play:** https://sekafaji.github.io/Sekaerth/
@@ -30,6 +32,18 @@
 
 One block represents one meter. Real-Size Earth is experimental: planet dimensions are Earth-scale, but geology and travel speed are not realistically simulated.
 
+## Inventory and resources (v3.4)
+
+Break stone, sand, roots, hardstone, obsidian, gem deposits and surface grass to collect stackable material drops; walking through Warm Blooms collects them too. Crystal Shards are separate crafting resources; **gems are still the currency for pickaxe upgrades and hearths**, to preserve existing progression.
+
+- Open your **24-slot backpack** with the in-game BAG button or **I / B** on keyboard.
+- The first five slots form the quickbar. Tap two backpack slots to move, swap or combine items.
+- Warm Bloom is a consumable that restores 12 warmth (up to 100). Use it from the backpack or the quickbar.
+- A full bag blocks mining rather than destroying a resource. **Discard stack** requires confirmation to make space; discarded stacks are removed permanently (world item drops are a future feature).
+- Inventory saves with each world's metadata and changed chunks in the same IndexedDB transaction. Old v4 worlds without inventory load with an empty backpack.
+
+Crafting, placeable blocks and equipment slots are upcoming systems, not included in this patch.
+
 ## Development
 
 Requires Node.js 22 or later.
@@ -40,6 +54,8 @@ npm run test
 npm run typecheck
 npm run dev
 npm run build
+npm test
+npm run typecheck
 ```
 
 Production deployment is handled by `.github/workflows/pages.yml` on `main`. Enable **Settings → Pages → Build and deployment → GitHub Actions** if deployment has not been configured.
