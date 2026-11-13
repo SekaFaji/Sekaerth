@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { width: 100%; min-height: 100%; margin: 0; }
+body { background: #0b0a12; overscroll-behavior: none; }
+button { touch-action: manipulation; }
+canvas { image-rendering: pixelated; }
