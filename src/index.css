@@ -6,3 +6,29 @@ html, body, #root { width: 100%; min-height: 100%; margin: 0; }
 body { background: #0b0a12; overscroll-behavior: none; }
 button { touch-action: manipulation; }
 canvas { image-rendering: pixelated; }
+
+/* Sekampfire's warm timber/slate panel language, sized for mobile readability. */
+.seka-plaque {
+  border: 1px solid rgba(201, 165, 109, 0.55);
+  box-shadow: inset 1px 1px 0 rgba(250, 213, 148, 0.26), inset -1px -1px 0 rgba(35, 27, 20, 0.8), 0 2px 8px rgba(0, 0, 0, 0.25);
+  background: linear-gradient(135deg, rgba(73, 53, 36, 0.81), rgba(24, 35, 44, 0.73));
+  text-shadow: 0 1px 1px rgba(0,0,0,0.6);
+}
+.seka-joystick-base {
+  border: 2px solid rgba(204, 172, 124, 0.65);
+  background: radial-gradient(circle, rgba(37, 43, 48, 0.38) 24%, rgba(48, 47, 39, 0.67) 70%, rgba(68, 47, 27, 0.72));
+  box-shadow: inset 0 0 0 7px rgba(24, 26, 25, 0.25), inset 0 0 0 1px rgba(255, 225, 165, 0.19), 0 3px 12px rgba(0, 0, 0, 0.3);
+}
+.seka-joystick-thumb {
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid #cda576;
+  background: radial-gradient(circle at 35% 25%, #8c6b4b, #3e362f 75%);
+  box-shadow: inset 0 2px 2px rgba(255, 238, 192, 0.14), 0 3px 8px rgba(0, 0, 0, 0.45);
+}
+.seka-joystick-active { border-color: #f3d49c; }
+.seka-action-button {
+  border: 2px solid rgba(216, 166, 103, 0.75);
+  background: radial-gradient(circle at 35% 20%, rgba(102, 79, 61, 0.95), rgba(29, 31, 37, 0.91));
+  box-shadow: inset 0 0 0 3px rgba(236, 185, 111, 0.1), 0 4px 12px rgba(0,0,0,0.45);
+  touch-action: manipulation;
+}
