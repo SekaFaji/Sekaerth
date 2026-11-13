@@ -79,11 +79,11 @@ test('v5 inventory persists atomically alongside chunk edits; v4 worlds load wit
 });
 
 
-test('v6 equipment persists without rewriting legacy v5 worlds', async () => {
+test('v7 equipment persists without rewriting legacy v5 worlds', async () => {
   const meta = {v: SAVE_FORMAT, id: 'gear-test', name: 'Equipment Planet', size: 'tiny' as const,
     seed: 14, px: 0, py: -1, facing: 1, pick: 1, warmth: 75, gems: 0, time: 0, won: false,
     hearths: [{x:0,y:0}], createdAt: Date.now(), updatedAt: Date.now(),
-    inventory: emptyInventory(), equipment: { body: 'root_cloak' as const, hands: 'miners_gloves' as const }};
+    inventory: emptyInventory(), equipment: { body: 'root_cloak' as const, hands: 'miners_gloves' as const, tool: 'stone_pick' as const }};
   await writeWorld(meta, []);
   const loaded = await readWorld(meta.id);
   assert.deepEqual(loaded?.equipment,meta.equipment);

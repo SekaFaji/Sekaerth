@@ -1,14 +1,14 @@
 {
   "name": "sekaerth",
   "private": true,
-  "version": "3.5.0",
+  "version": "3.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --experimental-strip-types --test src/ui/joystick.test.ts src/world/World.test.ts src/persistence/worldDb.test.ts src/items/inventory.test.ts src/crafting/recipes.test.ts src/items/equipment.test.ts"
+    "test": "node --experimental-strip-types --test src/ui/joystick.test.ts src/world/World.test.ts src/persistence/worldDb.test.ts src/items/inventory.test.ts src/crafting/recipes.test.ts src/items/equipment.test.ts src/survival/cold.test.ts src/rendering/lighting.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

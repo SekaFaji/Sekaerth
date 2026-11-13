@@ -10,9 +10,15 @@ export type Recipe = {
 
 /** Data-driven recipes: add future materials and stations here without touching UI logic. */
 export const RECIPES: readonly Recipe[] = [
-  { id: 'workbench', name: 'Workbench Kit', description: 'Place in an open tile to unlock workshop recipes nearby.', station: 'hand', output: { id: 'workbench_kit', count: 1 },
+  { id: 'workbench', name: 'Workbench Kit', description: 'A basic field-crafted station. Place it with ACT, then INTERACT nearby to unlock workshop recipes.', station: 'hand', output: { id: 'workbench_kit', count: 1 },
     ingredients: [{ id: 'stone', count: 16 }] },
-  { id: 'tonic', name: 'Warm Tonic', description: 'Restores 35 warmth when consumed.', station: 'hand', output: { id: 'warm_tonic', count: 1 },
+  { id: 'hearth', name: 'Hearth Kit', description: 'Provides up to 50 heat within a short radius. Several hearths may be required in extreme cold.', station: 'workbench', output: { id: 'hearth_kit', count: 1 },
+    ingredients: [{ id: 'stone', count: 8 }, { id: 'crystal', count: 2 }] },
+  { id: 'stone_pick', name: 'Stone Pickaxe', description: 'Tier 2 mining tool. Equip it from your backpack.', station: 'workbench', output: { id: 'stone_pick', count: 1 },
+    ingredients: [{ id: 'stone', count: 18 }, { id: 'fiber', count: 4 }, { id: 'crystal', count: 2 }] },
+  { id: 'crystal_pick', name: 'Crystal Pickaxe', description: 'Tier 3 mining tool for obsidian. Equip it from your backpack.', station: 'workbench', output: { id: 'crystal_pick', count: 1 },
+    ingredients: [{ id: 'hardstone', count: 12 }, { id: 'crystal', count: 8 }, { id: 'fiber', count: 6 }] },
+  { id: 'tonic', name: 'Warm Tonic', description: 'Restores 35 warmth when consumed.', station: 'workbench', output: { id: 'warm_tonic', count: 1 },
     ingredients: [{ id: 'bloom', count: 2 }, { id: 'crystal', count: 1 }] },
   { id: 'cloak', name: 'Root Cloak', description: 'Equip in Body slot to reduce warmth loss by 35%.', station: 'workbench', output: { id: 'root_cloak', count: 1 },
     ingredients: [{ id: 'fiber', count: 10 }, { id: 'bloom', count: 2 }] },

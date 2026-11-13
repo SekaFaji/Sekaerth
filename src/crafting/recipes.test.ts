@@ -28,16 +28,32 @@ test('cannot craft without ingredients or unknown recipe',()=>{
 test('outputs require free capacity after ingredient consumption',()=>{
   const bag=stocked(['bloom',2],['crystal',1]);
   for(let i=2;i<24;i++)bag[i]={id:'root_cloak',count:1};
-  assert.equal(canCraft(bag,RECIPES[1],false),null); // freeing input slots allows output
+  assert.equal(canCraft(bag,RECIPES.find(r=>r.id==='tonic')!,true),null); // freeing input slots allows output
   bag[0]={id:'warm_tonic',count:10}; bag[1]={id:'workbench_kit',count:10};
-  assert.equal(craftItem(bag,'tonic',false).ok,false);
+  assert.equal(craftItem(bag,'tonic',true).ok,false);
 });
 test('repeated recipes respect limited stock',()=>{
   const b=stocked(['bloom',4],['crystal',2]);
-  const a=craftItem(b,'tonic',false);assert.equal(a.ok,true);
+  const a=craftItem(b,'tonic',true);assert.equal(a.ok,true);
   if(!a.ok)return;
-  const c=craftItem(a.inventory,'tonic',false);assert.equal(c.ok,true);
+  const c=craftItem(a.inventory,'tonic',true);assert.equal(c.ok,true);
   if(!c.ok)return;
   assert.equal(countItem(c.inventory,'warm_tonic'),2);
-  assert.deepEqual(craftItem(c.inventory,'tonic',false),{ok:false,reason:'ingredients'});
+  assert.deepEqual(craftItem(c.inventory,'tonic',true),{ok:false,reason:'ingredients'});
+});
+
+test('hand crafting shows only workbench kit and other recipes require workbench',()=>{
+  assert.deepEqual(RECIPES.filter(r=>r.station==='hand').map(r=>r.id),['workbench']);
+  const bag=stocked(['stone',18],['fiber',4],['crystal',2]);
+  assert.deepEqual(craftItem(bag,'stone_pick',false),{ok:false,reason:'station'});
+  const result=craftItem(bag,'stone_pick',true);
+  assert.equal(result.ok,true);
+  if (result.ok) assert.equal(countItem(result.inventory,'stone_pick'),1);
+});
+test('a hearth is a craftable inventory item, not a free HUD action',()=>{
+  const bag=stocked(['stone',8],['crystal',2]);
+  assert.deepEqual(craftItem(bag,'hearth',false),{ok:false,reason:'station'});
+  const result=craftItem(bag,'hearth',true);
+  assert.ok(result.ok);
+  if(result.ok)assert.equal(countItem(result.inventory,'hearth_kit'),1);
 });
