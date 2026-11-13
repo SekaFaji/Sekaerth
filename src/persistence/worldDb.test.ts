@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import 'fake-indexeddb/auto';
 import { World } from '../world/World.ts';
 import { T } from '../world/terrain.ts';
+import { addItem, emptyInventory, normalizeInventory } from '../items/inventory.ts';
 import { SAVE_FORMAT, migrateLegacyWorld, listWorlds, readWorld, readChunk, writeWorld, listModifiedKeys, removeWorld } from './worldDb.ts';
 
 // Browser localStorage is separate from IndexedDB and must remain untouched by migration.
@@ -55,4 +56,24 @@ test('writes only touched chunks, loads lazily and deletes one world independent
   assert.equal(await readWorld(meta.id),undefined);
   assert.equal((await listModifiedKeys(meta.id)).size,0);
   assert.equal((await listWorlds()).length,1);
+});
+
+
+test('v5 inventory persists atomically alongside chunk edits; v4 worlds load with empty backpacks', async () => {
+  const inventory = addItem(emptyInventory(), 'stone', 112).inventory;
+  inventory[5] = { id: 'bloom', count: 2 };
+  const meta = {v: SAVE_FORMAT, id: 'bag-test', name: 'Inventory Planet', size: 'tiny' as const,
+    seed: 9, px: 5, py: -3, facing: 1, pick: 1, warmth: 73, gems: 14, time: 15, won: false,
+    hearths: [{x:0,y:0}], createdAt: Date.now(), updatedAt: Date.now(), inventory};
+  await writeWorld(meta, [{key:'2,0', edits:[7,T.AIR], dmg:[], revision:1}]);
+  const stored = await readWorld(meta.id);
+  assert.ok(stored);
+  assert.equal(stored.v,5);
+  assert.equal(stored.inventory?.[0]?.count,99);
+  assert.equal(stored.inventory?.[1]?.count,13);
+  assert.equal(stored.inventory?.[5]?.id,'bloom');
+  assert.deepEqual((await readChunk(meta.id,'2,0'))?.edits,[7,T.AIR]);
+  assert.equal(normalizeInventory({})[0],null);
+  assert.equal(normalizeInventory((await readWorld('legacy-import-v4'))?.inventory).length,24);
+  await removeWorld(meta.id);
 });

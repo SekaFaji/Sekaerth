@@ -1,7 +1,8 @@
 import type { WorldSize } from '../world/terrain.ts';
 import type { ChunkDelta, StoredChunk } from '../world/World.ts';
+import { normalizeInventory, type Inventory } from '../items/inventory.ts';
 
-export const SAVE_FORMAT = 4;
+export const SAVE_FORMAT = 5;
 export const DB_NAME = 'sekaerth-worlds-v1';
 export const LEGACY_KEYS = ['sekaerth-run-v1', 'sunward-run-v1'] as const;
 const MIGRATED_KEY = 'sekaerth-legacy-migrated-v4';
@@ -13,6 +14,8 @@ export type WorldSave = {
   createdAt: number; updatedAt: number; won: boolean;
   px: number; py: number; facing: number; pick: number; warmth: number;
   gems: number; time: number; hearths: { x: number; y: number }[];
+  /** Optional for v4 saves; normalize on load without rewriting old data. */
+  inventory?: Inventory;
 };
 
 let databasePromise: Promise<IDBDatabase> | undefined;
@@ -151,6 +154,7 @@ export async function migrateLegacyWorld(): Promise<'imported' | 'already-import
     facing: safeNumber(input.facing, 1), pick: safeNumber(input.pick, 1),
     warmth: safeNumber(input.warmth, 100), gems: safeNumber(input.gems, 0),
     time: safeNumber(input.time, 0), hearths: hearths.length ? hearths : [{x:0,y:0}],
+    inventory: normalizeInventory(input.inventory),
   };
   const edits = (input.edits && typeof input.edits === 'object' ? input.edits : {}) as Record<string, unknown>;
   const dmg = (input.dmg && typeof input.dmg === 'object' ? input.dmg : {}) as Record<string, unknown>;
