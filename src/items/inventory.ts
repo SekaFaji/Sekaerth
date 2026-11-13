@@ -10,6 +10,10 @@ export const ITEMS = {
   obsidian: { name: 'Obsidian', category: 'Material', maxStack: 99, color: '#a78ac7', symbol: 'OB', description: 'Rare glassy stone. Requires a tier 3 pick.' },
   crystal: { name: 'Crystal Shard', category: 'Material', maxStack: 99, color: '#7fdee0', symbol: 'CR', description: 'A crafting shard from gem veins. Gems remain upgrade currency.' },
   bloom: { name: 'Warm Bloom', category: 'Consumable', maxStack: 20, color: '#f78e9f', symbol: 'WB', description: 'Use to restore 12 warmth, up to 100.' },
+  workbench_kit: { name: 'Workbench Kit', category: 'Station', maxStack: 10, color: '#d2a375', symbol: 'WK', description: 'Place in an open tile. Craft advanced gear when standing nearby.' },
+  warm_tonic: { name: 'Warm Tonic', category: 'Consumable', maxStack: 10, color: '#e8ae72', symbol: 'WT', description: 'Use to recover 35 warmth.' },
+  root_cloak: { name: 'Root Cloak', category: 'Equipment', maxStack: 1, color: '#9fbd7e', symbol: 'RC', description: 'Wear to reduce warmth loss by 35%.' },
+  miners_gloves: { name: "Miner's Gloves", category: 'Equipment', maxStack: 1, color: '#a9bcd1', symbol: 'MG', description: 'Equip to deal 2 mining damage per hit without bypassing pick tiers.' },
 } as const;
 export type ItemId = keyof typeof ITEMS;
 export type ItemStack = { id: ItemId; count: number };

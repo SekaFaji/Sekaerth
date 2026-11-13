@@ -1,10 +1,22 @@
 # Sekaerth 🌍
 
-**Current version: 3.4 - Inventory and resource collection.**
+**Current version: 3.5 - Crafting and equipment.**
+
+**Developed by SekaFaji Games.**
 
 **Sekaerth** is a cozy, pixel-art planet exploration game. Start at the warm heart of a procedurally generated planet, mine outward, upgrade your pickaxe, place hearths and eventually reach the sunlight. Inspired by 2D sandbox exploration games, with mobile-first thumb movement.
 
 **Play:** https://sekafaji.github.io/Sekaerth/
+
+## v3.5 - crafting and equipment
+
+- Mobile-friendly **Crafting** and **Equipment** tabs beside the 24-slot backpack; open crafting using **CRAFT / C**, bag using **BAG / I / B**, and equipment using **E**.
+- Craft a **Workbench Kit** (16 Stone) anywhere; use it from the bag or quickbar to place a persistent workshop at your feet on an open tile. Stand within two tiles of the workbench to unlock advanced recipes.
+- Craft **Warm Tonics** (2 Warm Blooms + 1 Crystal Shard) anywhere to restore 35 warmth.
+- At a workbench, craft **Root Cloak** (10 Root Fiber + 2 Warm Blooms) and **Miner's Gloves** (14 Stone + 3 Crystal Shards).
+- Wear the cloak to reduce cold drain by 35%. Equip gloves to deal 2 mining damage per strike, without bypassing the existing pickaxe tier requirements.
+- Crafting uses all-or-nothing ingredient transactions, checks output capacity *after* consuming ingredients and leaves old worlds and the gem-based pickaxe forge intact.
+- Crafting benches save in modified terrain chunks. Each world's equipment saves in the same IndexedDB metadata record as its inventory. Existing v5 worlds load with empty equipment slots.
 
 ## v3.3 - foundation and world saves
 
@@ -42,7 +54,7 @@ Break stone, sand, roots, hardstone, obsidian, gem deposits and surface grass to
 - A full bag blocks mining rather than destroying a resource. **Discard stack** requires confirmation to make space; discarded stacks are removed permanently (world item drops are a future feature).
 - Inventory saves with each world's metadata and changed chunks in the same IndexedDB transaction. Old v4 worlds without inventory load with an empty backpack.
 
-Crafting, placeable blocks and equipment slots are upcoming systems, not included in this patch.
+Version 3.5 adds a first crafting station, wearable equipment and real recipe transactions. General block construction and item-dropping in the world remain future features.
 
 ## Development
 
@@ -54,21 +66,19 @@ npm run test
 npm run typecheck
 npm run dev
 npm run build
-npm test
-npm run typecheck
 ```
 
 Production deployment is handled by `.github/workflows/pages.yml` on `main`. Enable **Settings → Pages → Build and deployment → GitHub Actions** if deployment has not been configured.
 
 ## Controls
 
-Move and automatically dig using the touchscreen thumbstick or WASD/arrow keys. Tap **FORGE** (or U) to improve your pickaxe, **HEARTH** (or H) to plant a warm checkpoint, and **MENU** (or Esc) to pause.
+Move and automatically dig using the touchscreen thumbstick or WASD/arrow keys. Tap **CRAFT** (or C) for recipes, **BAG** (or I/B) for items, **E** for equipment, **FORGE** (or U) for a gem-powered pickaxe upgrade, **HEARTH** (or H) for a warm checkpoint, and **MENU** (or Esc) to pause.
 
 ## Architecture and persistence
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module responsibilities, transaction semantics, chunk hydration, migration rules and extension points.
 
-Next planned systems: item definitions, inventory, resource drops, crafting recipes, equipment and block placement. These are **not yet implemented** in v3.3.
+The codebase now includes data-driven item, crafting and equipment modules. Next planned systems: placeable building blocks, item drops in the world, equipment visuals, richer crafting stations and save backup/export.
 
 ## Known limitations
 

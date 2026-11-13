@@ -72,3 +72,18 @@ test('render-cache stays bounded even with an Earth-radius coordinate', () => {
   for (let i=0;i<1000;i++) world.get(i * CHUNK, 200);
   assert.ok(world.chunks.size<=256);
 });
+
+
+test('placed workbench persists as a passable modified chunk and hydrates after save', async () => {
+  const world = new World('tiny', 25);
+  const x = 3, y = -3;
+  world.set(x, y, T.WORKBENCH);
+  const dirty = world.dirtyChunks();
+  assert.equal(dirty.length, 1);
+  const key = dirty[0].key;
+  const restored = new World('tiny', 25);
+  restored.connectStorage(new Set([key]), async () => ({worldId:'test', key, edits:dirty[0].edits, dmg:dirty[0].dmg}));
+  assert.equal(restored.get(x, y), T.PENDING);
+  await restored.preload(Math.floor(x/16),Math.floor(y/16),0);
+  assert.equal(restored.get(x,y),T.WORKBENCH);
+});
