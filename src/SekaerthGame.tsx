@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { gridStep, thumbVector, JOYSTICK_RADIUS, type Axes } from "./ui/joystick";
 
 // ============================================================
-// SEKAERTH v3.1 — cozy dig-out-of-the-planet with selectable world sizes.
+// SEKAERTH v3.2 — cozy dig-out-of-the-planet with selectable world sizes.
 // 1 block = 1 meter. You start at the center of a round planet.
 // Terrain generates on demand so even Earth-scale coordinates don't
 // require allocating the planet upfront. Reach the sun to win.
@@ -559,6 +560,12 @@ export default function SekaerthGame() {
   const timeRef = useRef(0);
   const digRef = useRef<Record<string, number>>({});
   const keysRef = useRef<Record<string, boolean>>({});
+  const thumbRef = useRef<Axes | null>(null);
+  const stickPointerRef = useRef<number | null>(null);
+  const stickOriginRef = useRef({ x: 80, y: 76 });
+  const [stick, setStick] = useState({ x: 80, y: 76, dx: 0, dy: 0, active: false });
+  const [hud, setHud] = useState({ warmth: 100, gems: 0, pick: 1, depth: 1,
+    toSun: 1599, angle: -90, biome: "THE HEARTH", size: "tiny" as WorldSize });
   const particlesRef = useRef<Particle[]>([]);
   const digAnimRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const saveTickRef = useRef(0);
@@ -600,6 +607,18 @@ export default function SekaerthGame() {
     try { navigator.vibrate?.(ms); } catch { /* ignore */ }
   }, [opts.haptic]);
 
+  const updateHud = useCallback(() => {
+    const p = playerRef.current;
+    const world = worldRef.current;
+    const depth = Math.round(Math.hypot(p.x, p.y));
+    setHud({
+      warmth: Math.max(0, Math.round(warmthRef.current)), gems: gemsRef.current,
+      pick: pickRef.current, depth, toSun: Math.max(0, world.radius - depth),
+      biome: biome(depth / world.radius).name, size: world.size,
+      angle: Math.atan2(p.y, p.x) * (180 / Math.PI),
+    });
+  }, []);
+
   // ----- persistence -----
   const saveRun = useCallback(() => {
     const p = playerRef.current;
@@ -629,10 +648,11 @@ export default function SekaerthGame() {
     wonRef.current = false;
     saveTickRef.current = 0;
     setConfirmReplace(false);
+    updateHud();
     saveRun(); // new world's initial state replaces the previous save immediately
     setPhase("play");
     say(`YOU WAKE AT THE CENTER OF A ${WORLD_SIZE_BY_ID[size].label.toUpperCase()} WORLD. ANY WAY OUT IS UP.`);
-  }, [say, saveRun]);
+  }, [say, saveRun, updateHud]);
 
   const continueGame = useCallback(() => {
     try {
@@ -654,10 +674,11 @@ export default function SekaerthGame() {
       keysRef.current = {};
       wonRef.current = typeof s.won === "boolean" ? s.won : Math.hypot(s.px, s.py) >= worldRef.current.radius - 2;
       saveTickRef.current = 0;
+      updateHud();
       setPhase("play");
       say("THE ROCK REMEMBERS YOU.");
     } catch { say("SAVE WAS CORRUPTED. START A NEW ASCENT."); }
-  }, [say]);
+  }, [say, updateHud]);
 
   useEffect(() => {
     const raw = readStoredWithLegacy(SAVE_RUN, LEGACY_SAVE_RUN);
@@ -680,7 +701,58 @@ export default function SekaerthGame() {
   }, [phase, saveRun]);
 
   // ----- input -----
-  const press = useCallback((k: string, v: boolean) => { keysRef.current[k] = v; }, []);
+  // A floating thumb pad: the first touch establishes the center, then dragging
+  // sends a capped analog vector. Pointer capture keeps releases reliable.
+  const resetStick = useCallback(() => {
+    thumbRef.current = null;
+    stickPointerRef.current = null;
+    setStick({ x: 80, y: 76, dx: 0, dy: 0, active: false });
+  }, []);
+  const stickDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (stickPointerRef.current !== null) return;
+    event.preventDefault();
+    soundRef.current.ensure();
+    const box = event.currentTarget.getBoundingClientRect();
+    const radius = JOYSTICK_RADIUS + 26;
+    const x = Math.max(radius, Math.min(box.width - radius, event.clientX - box.left));
+    const y = Math.max(radius, Math.min(box.height - radius, event.clientY - box.top));
+    stickPointerRef.current = event.pointerId;
+    stickOriginRef.current = { x, y };
+    thumbRef.current = null;
+    setStick({ x, y, dx: 0, dy: 0, active: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, []);
+  const stickMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (stickPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    const box = event.currentTarget.getBoundingClientRect();
+    const { x, y } = stickOriginRef.current;
+    const next = thumbVector(event.clientX - box.left - x, event.clientY - box.top - y);
+    thumbRef.current = next.axis;
+    setStick({ x, y, dx: next.offsetX, dy: next.offsetY, active: true });
+  }, []);
+  const stickUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (stickPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    resetStick();
+  }, [resetStick]);
+
+  useEffect(() => {
+    if (phase !== "play") { resetStick(); keysRef.current = {}; }
+  }, [phase, resetStick]);
+  useEffect(() => {
+    const loseFocus = () => { keysRef.current = {}; resetStick(); };
+    const onVisibility = () => { if (document.hidden) loseFocus(); };
+    window.addEventListener("blur", loseFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("blur", loseFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [resetStick]);
 
   const upgradePick = useCallback(() => {
     if (phase !== "play") return;
@@ -755,11 +827,11 @@ export default function SekaerthGame() {
 
       // movement / digging
       const keys = keysRef.current;
-      let dx = 0, dy = 0;
-      if (keys["arrowleft"] || keys["a"]) dx = -1;
-      else if (keys["arrowright"] || keys["d"]) dx = 1;
-      else if (keys["arrowup"] || keys["w"]) dy = -1;
-      else if (keys["arrowdown"] || keys["s"]) dy = 1;
+      const input = thumbRef.current ?? {
+        x: Number(Boolean(keys["arrowright"] || keys["d"])) - Number(Boolean(keys["arrowleft"] || keys["a"])),
+        y: Number(Boolean(keys["arrowdown"] || keys["s"])) - Number(Boolean(keys["arrowup"] || keys["w"])),
+      };
+      const { x: dx, y: dy } = gridStep(input, (x, y) => passable(w.get(p.x + x, p.y + y)));
 
       if (dx !== 0 || dy !== 0) {
         if (dx !== 0) p.facing = dx;
@@ -860,6 +932,9 @@ export default function SekaerthGame() {
         return;
       }
 
+      // Native-style UI reads live game state, never independently simulates stats.
+      updateHud();
+
       // autosave
       if (++saveTickRef.current >= AUTOSAVE_TICKS) {
         saveTickRef.current = 0;
@@ -867,7 +942,7 @@ export default function SekaerthGame() {
       }
     }, TICK_MS);
     return () => clearInterval(interval);
-  }, [phase, say, buzz, saveRun]);
+  }, [phase, say, buzz, saveRun, updateHud]);
 
   // ----- canvas sizing: integer device-pixel scaling (crisp, no shimmer) -----
   useEffect(() => {
@@ -1061,39 +1136,8 @@ export default function SekaerthGame() {
         ctx.fillRect(0, 0, VIEW_W * TILE, VIEW_H * TILE);
       }
 
-      // ---------- in-canvas HUD (pixel font) ----------
-      const W_ = VIEW_W * TILE, H_ = VIEW_H * TILE;
-      // warmth
-      const warm = Math.max(0, Math.round(warmthRef.current));
-      drawText(ctx, "WARMTH", 3, 3, "#ffb35c");
-      ctx.fillStyle = "#000"; ctx.fillRect(2, 10, 50, 6);
-      ctx.fillStyle = "#241818"; ctx.fillRect(3, 11, 48, 4);
-      ctx.fillStyle = warm > 50 ? "#ff9f43" : warm > 25 ? "#ffb35c" : "#ff5c5c";
-      ctx.fillRect(3, 11, Math.round(48 * warm / 100), 4);
-      // gems
-      const gstr = "GEMS " + gemsRef.current;
-      drawText(ctx, gstr, W_ - textWidth(gstr, 1) - 3, 3, "#9fd8e8");
-      // pick tier
-      const pstr = "PICK T" + pickRef.current;
-      drawText(ctx, pstr, W_ - textWidth(pstr, 1) - 3, 10, pickRef.current >= 3 ? "#c9a0ff" : pickRef.current === 2 ? "#a8d8a8" : "#c8c8c8");
-      // compass toward the sun + distance to surface
-      if (pr > 4) {
-        const th = Math.atan2(p.y, p.x);
-        const dist = Math.max(0, Math.round(w.radius - pr));
-        const dstr = dist + "M";
-        drawText(ctx, dstr, Math.round(W_ / 2 - textWidth(dstr, 1) / 2), 16, "#ffe08a");
-        ctx.save();
-        ctx.translate(W_ / 2, 8);
-        ctx.rotate(th);
-        ctx.fillStyle = "#ffe08a";
-        ctx.fillRect(-6, -1, 8, 2);
-        ctx.fillRect(2, -3, 2, 6);
-        ctx.fillRect(4, -2, 2, 4);
-        ctx.restore();
-      }
-      // depth + biome
-      drawText(ctx, "DEPTH " + Math.round(pr) + "M FROM CORE", 3, H_ - 9, "#c8b8a8");
-      drawText(ctx, biome(pr / w.radius).name, W_ - textWidth(biome(pr / w.radius).name, 1) - 3, H_ - 9, "#e8d8b8");
+      // HUD is now a readable, responsive DOM overlay in Sekampfire-style
+      // translucent wooden plaques. Avoid double-rendering tiny canvas text.
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
@@ -1103,8 +1147,6 @@ export default function SekaerthGame() {
   const btn =
     "select-none border border-amber-200/30 bg-amber-500/10 px-5 py-2.5 font-mono text-[11px] uppercase tracking-[0.2em] text-amber-100 transition-colors hover:bg-amber-500/30 active:bg-amber-500/50 disabled:opacity-30";
   const btnSm = btn + " px-3 py-2 text-[10px]";
-  const dpadBtn =
-    "select-none bg-white/10 text-white text-lg font-bold w-12 h-12 flex items-center justify-center active:bg-white/30 border border-white/15";
 
   const goMenu = (m: Phase, from: Phase) => { setMenuFrom(from); setPhase(m); soundRef.current.ui(); };
   const back = () => { soundRef.current.ui(); setPhase(menuFrom === "paused" ? "paused" : "title"); };
@@ -1134,60 +1176,101 @@ export default function SekaerthGame() {
           style={{ imageRendering: "pixelated" }}
         />
 
-        {/* touch controls */}
+        {/* Sekampfire-inspired translucent wooden HUD plaques. */}
         {phase === "play" && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-            <div className="pointer-events-auto grid grid-cols-3 gap-1 opacity-90">
-              <span />
-              <button className={dpadBtn} onPointerDown={() => press("arrowup", true)} onPointerUp={() => press("arrowup", false)} onPointerLeave={() => press("arrowup", false)}>↑</button>
-              <span />
-              <button className={dpadBtn} onPointerDown={() => press("arrowleft", true)} onPointerUp={() => press("arrowleft", false)} onPointerLeave={() => press("arrowleft", false)}>←</button>
-              <button className={dpadBtn} onPointerDown={() => press("arrowdown", true)} onPointerUp={() => press("arrowdown", false)} onPointerLeave={() => press("arrowdown", false)}>↓</button>
-              <button className={dpadBtn} onPointerDown={() => press("arrowright", true)} onPointerUp={() => press("arrowright", false)} onPointerLeave={() => press("arrowright", false)}>→</button>
+          <div className="pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] z-20 select-none font-mono">
+            <div className="flex gap-1.5">
+              <div className="seka-plaque flex min-w-0 flex-1 items-center justify-between gap-2 px-2.5 py-1.5">
+                <div className="min-w-0">
+                  <div className="truncate text-[10px] font-bold tracking-[0.1em] text-amber-100">{hud.biome}</div>
+                  <div className="mt-0.5 text-[9px] text-amber-100/65">{WORLD_SIZE_BY_ID[hud.size].label} · CORE {distanceLabel(hud.depth)}</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-[9px] text-amber-100/65">☀ SUNLIGHT</div>
+                  <div className="flex items-center justify-end gap-1 text-[10px] font-bold text-amber-200">
+                    <span className="inline-block text-sm leading-none" aria-label="Direction to surface" style={{ transform: `rotate(${hud.angle}deg)` }}>➤</span>
+                    {distanceLabel(hud.toSun)}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button" onClick={togglePause}
+                className="seka-plaque pointer-events-auto flex w-[52px] shrink-0 flex-col items-center justify-center text-[10px] font-bold tracking-wider text-amber-100 active:bg-amber-300/25"
+                aria-label="Pause and open game menu"
+              >
+                <span className="text-base leading-none">☰</span>
+                <span className="mt-1 text-[8px]">MENU</span>
+              </button>
             </div>
-            <div className="pointer-events-auto flex flex-col gap-2 opacity-90">
-              <button
-                className="flex select-none items-center gap-2 border border-violet-300/40 bg-violet-500/30 px-3 py-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-violet-100 active:bg-violet-500/60"
-                onPointerDown={upgradePick}
-              >
-                <PixelArt grid={PICK_GRID} colors={ICON_COLORS} px={2} />
-                Pick
-                <span className="opacity-70">U</span>
-              </button>
-              <button
-                className="flex select-none items-center gap-2 border border-orange-300/40 bg-orange-500/30 px-3 py-3 font-mono text-[10px] font-semibold uppercase tracking-widest text-orange-100 active:bg-orange-500/60"
-                onPointerDown={placeHearth}
-              >
-                <PixelArt grid={FLAME_GRID} colors={ICON_COLORS} px={2} />
-                Hearth
-                <span className="opacity-70">{HEARTH_COST} GEMS</span>
-              </button>
-              <div className="flex gap-2">
-                <button className={dpadBtn + " w-12 h-10"} onClick={togglePause}>
-                  <PixelArt grid={PAUSE_GRID} colors={ICON_COLORS} px={2} />
-                </button>
-                <button className={dpadBtn + " w-12 h-10"} onClick={fullscreen}>
-                  <PixelArt grid={FS_GRID} colors={ICON_COLORS} px={2} />
-                </button>
+            <div className="mt-1.5 grid grid-cols-[1.5fr_0.85fr_0.9fr] gap-1.5">
+              <div className="seka-plaque min-w-0 px-2 py-1.5">
+                <div className="flex items-center justify-between text-[9px] text-amber-100/80"><span>WARMTH</span><strong className="text-amber-100">{hud.warmth}%</strong></div>
+                <div className="mt-1 h-[5px] overflow-hidden border border-stone-500/60 bg-stone-950/80">
+                  <div className="h-full transition-[width] duration-200" style={{ width: `${hud.warmth}%`, background: hud.warmth < 25 ? "#e37a72" : "#eab266" }} />
+                </div>
+              </div>
+              <div className="seka-plaque flex min-w-0 flex-col justify-center px-2 py-1.5 text-[9px]">
+                <span className="text-amber-100/70">GEMS</span>
+                <strong className="mt-0.5 text-xs text-cyan-200">{hud.gems}</strong>
+              </div>
+              <div className="seka-plaque flex min-w-0 flex-col justify-center px-2 py-1.5 text-[9px]">
+                <span className="text-amber-100/70">PICKAXE</span>
+                <strong className="mt-0.5 text-[11px] text-amber-100">TIER {hud.pick}</strong>
               </div>
             </div>
           </div>
         )}
 
-        {/* toast */}
-        {toast && (
-          <div
-            key={toast.id}
-            className="pointer-events-none absolute bottom-24 left-1/2 z-30 w-[92%] -translate-x-1/2 rounded bg-black/80 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-widest text-amber-100"
-          >
-            {toast.text}
-          </div>
+        {/* Drag thumb to move and automatically dig, like the Cursed Project movement thumb. */}
+        {phase === "play" && (
+          <>
+            <div
+              role="group" aria-label="Touch movement thumbstick: drag to move or dig"
+              data-testid="sekaerth-thumbstick"
+              className="pointer-events-auto absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-2 z-20 h-[152px] w-[160px] touch-none select-none"
+              onPointerDown={stickDown} onPointerMove={stickMove}
+              onPointerUp={stickUp} onPointerCancel={stickUp}
+              onLostPointerCapture={(event) => { if (stickPointerRef.current === event.pointerId) resetStick(); }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <div className="seka-joystick-base pointer-events-none absolute h-[94px] w-[94px] rounded-full"
+                style={{ left: stick.x - 47, top: stick.y - 47 }}>
+                <span className="absolute left-1/2 top-[6px] -translate-x-1/2 text-[11px] text-amber-200/40">◆</span>
+                <span className="absolute bottom-[6px] left-1/2 -translate-x-1/2 text-[11px] text-amber-200/40">◆</span>
+                <span className="absolute left-[8px] top-1/2 -translate-y-1/2 text-[11px] text-amber-200/40">◆</span>
+                <span className="absolute right-[8px] top-1/2 -translate-y-1/2 text-[11px] text-amber-200/40">◆</span>
+                <div className={`seka-joystick-thumb absolute left-1/2 top-1/2 h-[48px] w-[48px] -translate-x-1/2 -translate-y-1/2 rounded-full ${stick.active ? "seka-joystick-active" : ""}`}
+                  style={{ marginLeft: stick.dx, marginTop: stick.dy }}>
+                  <span className="text-[19px] leading-none text-amber-100/90">✦</span>
+                </div>
+              </div>
+              <div className="absolute inset-x-0 bottom-0 text-center font-mono text-[9px] tracking-[0.16em] text-amber-100/70">DRAG TO MOVE / DIG</div>
+            </div>
+
+            <div className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-3 z-20 flex flex-col items-center gap-3 select-none">
+              <button type="button" onClick={upgradePick}
+                aria-label={`Forge pickaxe upgrade, current tier ${hud.pick}`}
+                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-0.5 rounded-full active:scale-95">
+                <PixelArt grid={PICK_GRID} colors={ICON_COLORS} px={2} />
+                <span className="font-mono text-[9px] font-bold text-violet-100">FORGE</span>
+                <span className="font-mono text-[8px] text-amber-100/75">{hud.pick < 3 ? `${PICK_COST[hud.pick + 1]} GEMS` : "MAX"}</span>
+              </button>
+              <button type="button" onClick={placeHearth}
+                aria-label={`Place a hearth, costs ${HEARTH_COST} gems`}
+                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-0.5 rounded-full active:scale-95">
+                <PixelArt grid={FLAME_GRID} colors={ICON_COLORS} px={2} />
+                <span className="font-mono text-[9px] font-bold text-orange-100">HEARTH</span>
+                <span className="font-mono text-[8px] text-amber-100/75">{HEARTH_COST} GEMS</span>
+              </button>
+            </div>
+          </>
         )}
 
-        {/* pause button on desktop */}
-        {phase === "play" && (
-          <div className="absolute right-2 top-2 z-20 hidden sm:flex gap-1">
-            <button className={btnSm} onClick={togglePause}>Pause (Esc)</button>
+        {/* Notifications stay clear of both thumbstick and action buttons. */}
+        {toast && (
+          <div key={toast.id}
+            className="seka-plaque pointer-events-none absolute bottom-[192px] left-1/2 z-30 w-[90%] -translate-x-1/2 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-widest text-amber-100">
+            {toast.text}
           </div>
         )}
 
@@ -1299,7 +1382,7 @@ export default function SekaerthGame() {
               <li>EVERY DIRECTION IS "UP" — DIG ANY WAY.</li>
               <li>THE ARROW ALWAYS POINTS TO THE SUN.</li>
               <li>1 BLOCK = 1 METER. CHOOSE THE PLANET RADIUS WHEN STARTING.</li>
-              <li>WASD / ARROWS / D-PAD — HOLD TO DIG.</li>
+              <li>WASD / ARROWS OR DRAG THE THUMBSTICK TO MOVE AND DIG.</li>
               <li>BLOCKS HAVE HP — DAMAGE STICKS (10 STATES).</li>
               <li>GRAY HARDSTONE NEEDS TIER 2, OBSIDIAN TIER 3.</li>
               <li>U OR BUTTON — FORGE A BETTER PICK (COSTS GEMS).</li>
