@@ -693,7 +693,7 @@ export default function SekaerthGame() {
 
   const makeRecipe = useCallback((id: string) => {
     const result = craftItem(inventoryRef.current, id, workbenchNearby());
-    if (!result.ok) {
+    if (result.ok === false) {
       const warning = { station: 'WORKBENCH REQUIRED', ingredients: 'MORE MATERIALS REQUIRED', space: 'NOT ENOUGH BACKPACK SPACE', recipe: 'UNKNOWN RECIPE' };
       say(warning[result.reason]); return;
     }
