@@ -73,3 +73,13 @@ Any new persistent gameplay field must have a default for migrated saves and a t
 - `T.WORKBENCH`: a passable placed station persisted through the existing per-chunk terrain edit mechanism.
 - `src/ui/InventoryPanel.tsx`: shared bag/crafting/equipment overlay, isolated from world save internals.
 - `WorldSave.equipment` in metadata schema v6. v5 loads with empty slots; the IndexedDB database itself does not need a structural version bump.
+
+## v3.6 survival and interaction extension
+
+- `src/survival/cold.ts` is a deterministic, location/biome-based climate model; hearth heat uses the same units as ambient cold (50 units per hearth at the center) and overlapping hearths add together with distance falloff.
+- `src/rendering/lighting.ts` draws a full-frame darkness mask with radial player/hearth cutouts. Rendering uses an offscreen canvas rather than clipped light rectangles.
+- `src/crafting/recipes.ts` restricts hand crafting to a Workbench Kit; pickaxes, Hearth Kits, consumables and equipment require interaction near a placed workbench.
+- `src/items/equipment.ts` supports a pickaxe slot. Old numeric pick tiers are restored to the appropriate equipped tool on load; saved world metadata version is 7 and does not require an IndexedDB object-store migration.
+- The mobile quickbar selects an action item. ACT holds mining or places/uses a selected kit; INTERACT opens a nearby workbench. Auto-Dig is an optional saved preference (off by default for new settings).
+- `src/ui/itemArt.tsx` contains data-driven pixel-art silhouettes instead of letter tiles. This is an initial visual pass; crafted world objects still use the existing renderer.
+- Large worlds still save only changed chunks. Hearth positions remain metadata and will require a chunk-indexed representation if extremely large settlements become common.

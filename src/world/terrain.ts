@@ -20,7 +20,6 @@ export const TILE = 16;         // tile px on the internal surface
 export const VIEW_W = 13;        // internal surface width in tiles
 export const VIEW_H = 23;        // internal surface height in tiles
 export const TICK_MS = 100;
-export const HEARTH_COST = 5;
 export const WARM_RADIUS = 7;   // hearth warm zone, meters
 export const CORE_WARM_R = 48;  // the core is naturally warm within this radius
 
@@ -47,10 +46,6 @@ export function blockStats(t: number, x: number, y: number, radius: number): { h
   if (t === T.GRASS) return { hp: 2, tier: 0 };
   return { hp: 1, tier: 0 }; // sand, flower
 }
-
-// pick progression
-export const PICK_COST = [0, 0, 10, 25];
-export const PICK_NAME = ["", "BASIC PICK", "STONE PICK", "CRYSTAL PICK"];
 
 // biome by depth fraction d = r/R (0 = core, 1 = surface)
 export function biome(d: number) {

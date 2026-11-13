@@ -3,7 +3,7 @@ import type { ChunkDelta, StoredChunk } from '../world/World.ts';
 import { normalizeInventory, type Inventory } from '../items/inventory.ts';
 import type { Equipment } from '../items/equipment.ts';
 
-export const SAVE_FORMAT = 6;
+export const SAVE_FORMAT = 7;
 export const DB_NAME = 'sekaerth-worlds-v1';
 export const LEGACY_KEYS = ['sekaerth-run-v1', 'sunward-run-v1'] as const;
 const MIGRATED_KEY = 'sekaerth-legacy-migrated-v4';
@@ -17,7 +17,7 @@ export type WorldSave = {
   gems: number; time: number; hearths: { x: number; y: number }[];
   /** Optional for v4 saves; normalize on load without rewriting old data. */
   inventory?: Inventory;
-  /** Optional equipment for v5 and earlier world saves. */
+  /** Equipment now includes a pickaxe slot (v7). Old worlds still load via normalization. */
   equipment?: Equipment;
 };
 

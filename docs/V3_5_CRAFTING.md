@@ -1,3 +1,5 @@
+> Historical release note: v3.6 replaces the direct gem-powered Forge and Hearth actions with workbench crafting. See [V3_6_SURVIVAL.md](V3_6_SURVIVAL.md).
+
 # Sekaerth v3.5 - Crafting and Equipment
 
 Developed by SekaFaji Games.

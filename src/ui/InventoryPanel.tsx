@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ItemArt } from './itemArt.tsx';
 import { HOTBAR_SLOTS, INVENTORY_SLOTS, ITEMS, countItem, usedSlots, type Inventory, type ItemStack } from '../items/inventory.ts';
 import { RECIPES, canCraft, type CraftFailure } from '../crafting/recipes.ts';
 import { type Equipment, type EquipmentSlot } from '../items/equipment.ts';
@@ -6,13 +7,9 @@ import { type Equipment, type EquipmentSlot } from '../items/equipment.ts';
 /** Consistent hand-drawn-looking tile glyphs without font-dependent emoji. */
 export function ItemIcon({ stack, small = false }: { stack: ItemStack | null; small?: boolean }) {
   if (!stack) return <span className="block h-5 w-5" aria-hidden />;
-  const item = ITEMS[stack.id];
-  return (
-    <span aria-hidden className={`relative inline-flex shrink-0 items-center justify-center border-2 border-black/35 font-mono font-black shadow-[inset_2px_2px_0_rgba(255,255,255,0.2),2px_2px_0_rgba(0,0,0,0.4)] ${small ? 'h-6 w-6 text-[8px]' : 'h-8 w-8 text-[10px]'}`}
-      style={{ background: item.color, color: '#1e1b1a' }}>
-      <span className="absolute left-0.5 top-0.5 h-1 w-1 bg-white/30" />{item.symbol}
-    </span>
-  );
+  return <span className={`inline-flex shrink-0 items-center justify-center ${small ? 'h-7 w-7' : 'h-9 w-9'}`}>
+    <ItemArt id={stack.id} size={small ? 26 : 34} />
+  </span>;
 }
 
 type Tab = 'bag' | 'craft' | 'gear';
@@ -83,9 +80,10 @@ export default function InventoryPanel({ inventory, warmth, equipment, nearWorkb
               <div className="flex items-center gap-2"><ItemIcon stack={stack}/><div><div className="text-xs font-bold text-amber-200">{ITEMS[stack.id].name}</div><div className="text-[9px] text-amber-100/55">{ITEMS[stack.id].category} · {stack.count}/{ITEMS[stack.id].maxStack}</div></div></div>
               <p className="mt-2 text-[10px] leading-relaxed text-amber-100/75">{ITEMS[stack.id].description}</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {(stack.id==='bloom'||stack.id==='warm_tonic'||stack.id==='workbench_kit') && <button type="button" className={button} disabled={stack.id!=='workbench_kit'&&warmth>=100}
-                  onClick={()=>{onUse(selected!);setSelected(null);setConfirmDiscard(false);}}>{stack.id==='workbench_kit'?'Place Workbench':`Use +${stack.id==='bloom'?12:35} Warmth`}</button>}
-                {(stack.id==='root_cloak'||stack.id==='miners_gloves') && <button type="button" className={button} onClick={()=>{onEquip(selected!);setSelected(null);}}>Equip</button>}
+                {(stack.id==='bloom'||stack.id==='warm_tonic') && <button type="button" className={button} disabled={warmth>=100}
+                  onClick={()=>{onUse(selected!);setSelected(null);setConfirmDiscard(false);}}>{`Use +${stack.id==='bloom'?12:35} Warmth`}</button>}
+                {(stack.id==='root_cloak'||stack.id==='miners_gloves'||stack.id==='stone_pick'||stack.id==='crystal_pick'||stack.id==='starter_pick') && <button type="button" className={button} onClick={()=>{onEquip(selected!);setSelected(null);}}>Equip</button>}
+                {(stack.id==='workbench_kit'||stack.id==='hearth_kit') && <span className="text-[9px] text-amber-200/80">Move into slots 1-5, select and press ACT to place.</span>}
                 {!confirmDiscard?<button type="button" onClick={()=>setConfirmDiscard(true)} className="border border-red-200/35 bg-red-950/30 px-3 py-2 text-[10px] uppercase text-rose-200">Discard stack</button>:<>
                   <button type="button" onClick={()=>{onDiscard(selected!);setSelected(null);setConfirmDiscard(false);}} className="border border-red-300/65 bg-red-900/60 px-3 py-2 text-[10px] uppercase text-rose-100">Confirm discard</button>
                   <button type="button" className={button} onClick={()=>setConfirmDiscard(false)}>Cancel</button>
@@ -95,8 +93,8 @@ export default function InventoryPanel({ inventory, warmth, equipment, nearWorkb
           </div>
         </>}
         {tab==='craft' && <div className="flex flex-col gap-2">
-          <div className="seka-plaque px-3 py-2 text-[10px] text-amber-100/75">{nearWorkbench ? 'Workbench recipes unlocked' : 'Craft anywhere. Place a Workbench Kit to unlock advanced equipment.'}</div>
-          {RECIPES.map(recipe=>{
+          <div className="seka-plaque px-3 py-2 text-[10px] text-amber-100/75">{nearWorkbench ? 'WORKBENCH - TOOL, HEARTH AND EQUIPMENT RECIPES' : 'HAND CRAFTING - WORKBENCH KIT ONLY. Place and INTERACT with it for advanced recipes.'}</div>
+          {RECIPES.filter(recipe => nearWorkbench || recipe.station === 'hand').map(recipe=>{
             const reason=canCraft(inventory,recipe,nearWorkbench);
             return <div className="seka-plaque p-3" key={recipe.id}>
               <div className="flex items-start gap-2"><ItemIcon stack={{id:recipe.output.id,count:recipe.output.count}} />
@@ -110,15 +108,15 @@ export default function InventoryPanel({ inventory, warmth, equipment, nearWorkb
           })}
         </div>}
         {tab==='gear' && <div className="flex flex-col gap-3">
-          {(['body','hands'] as const).map(slot=>{
+          {(['tool','body','hands'] as const).map(slot=>{
             const id=equipment[slot];
             return <div className="seka-plaque flex items-center gap-3 p-3" key={slot}>
               <ItemIcon stack={id?{id,count:1}:null}/>
-              <div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-wider text-amber-100/65">{slot==='body'?'Body':'Hands'}</p><p className="text-[12px] font-bold text-amber-200">{id?ITEMS[id].name:'Empty slot'}</p><p className="mt-1 text-[9px] text-amber-100/70">{slot==='body'?'Cloak: reduces cold loss':'Gloves: stronger mining hits'}</p></div>
-              {id&&<button type="button" className={button} onClick={()=>onUnequip(slot)}>Unequip</button>}
+              <div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-wider text-amber-100/65">{slot==='body'?'Body':slot==='hands'?'Hands':'Pickaxe'}</p><p className="text-[12px] font-bold text-amber-200">{id?ITEMS[id].name:'Empty slot'}</p><p className="mt-1 text-[9px] text-amber-100/70">{slot==='body'?'Cloak: reduces cold loss':slot==='hands'?'Gloves: stronger mining hits':'Pickaxe tier controls which rock can be mined'}</p></div>
+              {id&&slot!=='tool'&&<button type="button" className={button} onClick={()=>onUnequip(slot)}>Unequip</button>}
             </div>;
           })}
-          <p className="seka-plaque p-3 text-[10px] leading-relaxed text-amber-100/70">Craft gear in the Crafting tab, then tap a crafted item in your Backpack to equip it. Your gear saves with this world.</p>
+          <p className="seka-plaque p-3 text-[10px] leading-relaxed text-amber-100/70">Craft equipment at a nearby workbench using INTERACT, then tap a crafted item in your Backpack to equip it. Your gear saves with this world.</p>
         </div>}
       </main>
     </div>

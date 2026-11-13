@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { addItem, countItem, emptyInventory } from './inventory.ts';
-import { coldDrainMultiplier, digStrength, emptyEquipment, equipFromBag, normalizeEquipment, unequipToBag } from './equipment.ts';
+import { coldDrainMultiplier, digStrength, emptyEquipment, equipFromBag, normalizeEquipment, unequipToBag, restoreLegacyPick, equippedPickTier } from './equipment.ts';
 test('equip and unequip move actual item without duplication',()=>{
   const bag=addItem(emptyInventory(),'miners_gloves',1).inventory;
   const result=equipFromBag(bag,emptyEquipment(),0);
@@ -14,15 +14,32 @@ test('equip and unequip move actual item without duplication',()=>{
 });
 test('replacing equipped gear returns previous item without duplicating',()=>{
   const bag=addItem(emptyInventory(),'miners_gloves',1).inventory;
-  const result=equipFromBag(bag,{body:null,hands:'miners_gloves'},0);
+  const result=equipFromBag(bag,{body:null,hands:'miners_gloves',tool:'starter_pick'},0);
   assert.ok(result);assert.equal(countItem(result.inventory,'miners_gloves'),1);
   assert.equal(result.equipment.hands,'miners_gloves');
 });
 test('normalization rejects invalid gear and warmth bonus applies only when worn',()=>{
   assert.deepEqual(normalizeEquipment({hands:'stone',body:'miners_gloves'}),emptyEquipment());
-  assert.equal(coldDrainMultiplier({hands:null,body:'root_cloak'}),0.65);
+  assert.equal(coldDrainMultiplier({hands:null,body:'root_cloak',tool:'starter_pick'}),0.65);
 });
 test('cannot unequip into full inventory',()=>{
   const bag=emptyInventory().map(()=>({id:'stone' as const,count:99}));
-  assert.equal(unequipToBag(bag,{body:'root_cloak',hands:null},'body'),null);
+  assert.equal(unequipToBag(bag,{body:'root_cloak',hands:null,tool:'starter_pick'},'body'),null);
+});
+
+test('old tier 2/3 picks migrate into the equipped tool slot',()=>{
+  assert.equal(restoreLegacyPick(normalizeEquipment({body:null,hands:null}),2).tool,'stone_pick');
+  assert.equal(restoreLegacyPick(normalizeEquipment({body:null,hands:null}),3).tool,'crystal_pick');
+  assert.equal(equippedPickTier(restoreLegacyPick(emptyEquipment(),3)),3);
+  assert.equal(equippedPickTier(emptyEquipment()),1);
+});
+test('crafted pick replaces starter tool without duplication and cannot be unequipped into nowhere',()=>{
+  const bag=addItem(emptyInventory(),'stone_pick',1).inventory;
+  const result=equipFromBag(bag,emptyEquipment(),0);
+  assert.ok(result);
+  assert.equal(result.equipment.tool,'stone_pick');
+  assert.equal(equippedPickTier(result.equipment),2);
+  assert.equal(countItem(result.inventory,'starter_pick'),1);
+  assert.equal(countItem(result.inventory,'stone_pick'),0);
+  assert.equal(unequipToBag(result.inventory,result.equipment,'tool'),null);
 });

@@ -2,8 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { gridStep, thumbVector, JOYSTICK_RADIUS, type Axes } from "./ui/joystick";
 import { World } from "./world/World";
 import { WORLD_SIZES, WORLD_SIZE_BY_ID, type WorldSize, distanceLabel, CHUNK, TILE, VIEW_W, VIEW_H,
-  TICK_MS, HEARTH_COST, WARM_RADIUS, CORE_WARM_R, T, diggable, passable,
-  blockStats, PICK_COST, PICK_NAME, biome, BIOME_KEYS, BIOME_ROCKS, hash2, shade } from "./world/terrain";
+  TICK_MS, T, diggable, passable,
+  blockStats, biome, BIOME_KEYS, BIOME_ROCKS, hash2, shade } from "./world/terrain";
 import { SAVE_FORMAT, listWorlds, readWorld, readChunk, listModifiedKeys, writeWorld,
   removeWorld, migrateLegacyWorld, newWorldId, storageEstimate, type WorldSave } from "./persistence/worldDb";
 import { ITEMS, INVENTORY_SLOTS, HOTBAR_SLOTS, type Inventory, emptyInventory,
@@ -11,10 +11,12 @@ import { ITEMS, INVENTORY_SLOTS, HOTBAR_SLOTS, type Inventory, emptyInventory,
   dropForBlock, usedSlots, discardSlot } from "./items/inventory";
 import InventoryPanel, { ItemIcon } from "./ui/InventoryPanel";
 import { craftItem, RECIPES } from "./crafting/recipes";
-import { coldDrainMultiplier, digStrength, emptyEquipment, normalizeEquipment, equipFromBag, unequipToBag, type Equipment, type EquipmentSlot } from "./items/equipment";
+import { coldDrainMultiplier, digStrength, emptyEquipment, normalizeEquipment, equipFromBag, unequipToBag, restoreLegacyPick, equippedPickTier, type Equipment, type EquipmentSlot } from "./items/equipment";
+import { climateAt, HEARTH_HEAT } from "./survival/cold";
+import { LightingMask } from "./rendering/lighting";
 
 // ============================================================
-// SEKAERTH v3.5 - cozy dig-out-of-the-planet with selectable world sizes.
+// SEKAERTH v3.6 - cozy dig-out-of-the-planet with selectable world sizes.
 // 1 block = 1 meter. You start at the center of a round planet.
 // Terrain generates on demand so even Earth-scale coordinates don't
 // require allocating the planet upfront. Reach the sun to win.
@@ -328,12 +330,13 @@ const SUN_COLORS: Record<string, string> = { Y: "#f59e0b" };
 
 // ---------- main ----------
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string };
-type Opts = { fxHigh: boolean; sound: boolean; vol: number; haptic: boolean };
+type Opts = { fxHigh: boolean; sound: boolean; vol: number; haptic: boolean; autoDig: boolean };
 
 export default function SekaerthGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const tilesetRef = useRef<Tileset | null>(null);
+  const lightingRef = useRef<LightingMask | null>(null);
   const worldRef = useRef<World>(new World());
   const soundRef = useRef<Sound>(new Sound());
   const playerRef = useRef({ x: 0, y: -1, facing: 1 });
@@ -342,6 +345,9 @@ export default function SekaerthGame() {
   const gemsRef = useRef(0); // Existing gem currency stays separate from craftable crystal shards.
   const inventoryRef = useRef<Inventory>(emptyInventory());
   const equipmentRef = useRef<Equipment>(emptyEquipment());
+  const aimRef = useRef({ x: 1, y: 0 });
+  const actHeldRef = useRef(false);
+  const [craftingMode, setCraftingMode] = useState<"hand" | "workbench">("hand");
   const [inventoryTab, setInventoryTab] = useState<"bag"|"craft"|"gear">("bag");
   const [, publishInventory] = useState(0);
   const [hotbarSlot, setHotbarSlot] = useState(0);
@@ -355,7 +361,7 @@ export default function SekaerthGame() {
   const stickOriginRef = useRef({ x: 80, y: 76 });
   const [stick, setStick] = useState({ x: 80, y: 76, dx: 0, dy: 0, active: false });
   const [hud, setHud] = useState({ warmth: 100, gems: 0, pick: 1, depth: 1,
-    toSun: 1599, angle: -90, biome: "THE HEARTH", size: "tiny" as WorldSize, bag: 0 });
+    toSun: 1599, angle: -90, biome: "THE HEARTH", size: "tiny" as WorldSize, bag: 0, cold: 0, heat: 0 });
   const particlesRef = useRef<Particle[]>([]);
   const digAnimRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const saveTickRef = useRef(0);
@@ -382,9 +388,9 @@ export default function SekaerthGame() {
   const [opts, setOpts] = useState<Opts>(() => {
     try {
       const raw = readStoredWithLegacy(SAVE_OPTS, LEGACY_SAVE_OPTS);
-      if (raw) return { fxHigh: true, sound: true, vol: 0.7, haptic: true, ...JSON.parse(raw) };
+      if (raw) return { fxHigh: true, sound: true, vol: 0.7, haptic: true, autoDig: false, ...JSON.parse(raw) };
     } catch { /* ignore */ }
-    return { fxHigh: true, sound: true, vol: 0.7, haptic: true };
+    return { fxHigh: true, sound: true, vol: 0.7, haptic: true, autoDig: false };
   });
 
   useEffect(() => {
@@ -415,6 +421,8 @@ export default function SekaerthGame() {
       biome: biome(depth / world.radius).name, size: world.size,
       angle: Math.atan2(p.y, p.x) * (180 / Math.PI),
       bag: usedSlots(inventoryRef.current),
+      cold: climateAt(p.x, p.y, world.radius, world.hearths).ambientCold,
+      heat: climateAt(p.x, p.y, world.radius, world.hearths).hearthHeat,
     });
   }, []);
 
@@ -545,11 +553,12 @@ export default function SekaerthGame() {
       warmthRef.current = s.warmth;
       gemsRef.current = s.gems;
       inventoryRef.current = normalizeInventory(s.inventory);
-      equipmentRef.current = normalizeEquipment(s.equipment);
+      // Earlier worlds stored a numeric pick tier, not a tool equipment ID.
+      equipmentRef.current = restoreLegacyPick(normalizeEquipment(s.equipment), s.pick ?? 1);
       publishInventory((n) => n + 1);
       setHotbarSlot(0);
       fullBagWarningRef.current = null;
-      pickRef.current = s.pick ?? 1;
+      pickRef.current = equippedPickTier(equipmentRef.current);
       timeRef.current = s.time ?? 0;
       digRef.current = {};
       keysRef.current = {};
@@ -633,10 +642,10 @@ export default function SekaerthGame() {
   }, [resetStick]);
 
   useEffect(() => {
-    if (phase !== "play") { resetStick(); keysRef.current = {}; }
+    if (phase !== "play") { resetStick(); keysRef.current = {}; actHeldRef.current = false; }
   }, [phase, resetStick]);
   useEffect(() => {
-    const loseFocus = () => { keysRef.current = {}; resetStick(); };
+    const loseFocus = () => { keysRef.current = {}; actHeldRef.current = false; resetStick(); };
     const onVisibility = () => { if (document.hidden) loseFocus(); };
     window.addEventListener("blur", loseFocus);
     document.addEventListener("visibilitychange", onVisibility);
@@ -656,29 +665,20 @@ export default function SekaerthGame() {
     return false;
   }, []);
 
-  const openBackpack = useCallback((tab: "bag" | "craft" | "gear") => {
+  const openBackpack = useCallback((tab: "bag" | "craft" | "gear", mode: "hand" | "workbench" = "hand") => {
+    setCraftingMode(mode);
     setInventoryTab(tab);
     setPhase('inventory');
   }, []);
 
-  /** Consume items in inventory, or place a workbench using a real saved tile. */
+  /** Consumables are used from backpack; placeables require an ACT press. */
   const useInventoryItem = useCallback((slot: number) => {
     const stack = inventoryRef.current[slot];
-    if (!stack || !['bloom', 'warm_tonic', 'workbench_kit'].includes(stack.id)) return;
-    if (stack.id === 'workbench_kit') {
-      const w = worldRef.current, p = playerRef.current;
-      if (w.get(p.x, p.y) !== T.AIR) { say('STAND IN AN OPEN TILE TO PLACE A WORKBENCH'); return; }
-      const next = consumeSlot(inventoryRef.current, slot);
-      if (!next) return;
-      w.set(p.x, p.y, T.WORKBENCH);
-      inventoryRef.current = next;
-      publishInventory((n) => n + 1);
-      soundRef.current.hearth(); buzz(20);
-      setPhase('play');
-      say('WORKBENCH PLACED - CRAFT ADVANCED GEAR NEARBY');
-      void saveRun().catch(() => {});
-      return;
+    if (!stack) return;
+    if (stack.id === 'workbench_kit' || stack.id === 'hearth_kit') {
+      say('PUT THE KIT IN A QUICK SLOT, THEN PRESS ACT TO PLACE IT'); return;
     }
+    if (stack.id !== 'bloom' && stack.id !== 'warm_tonic') return;
     if (warmthRef.current >= 100) { say('WARMTH IS ALREADY FULL'); return; }
     const next = consumeSlot(inventoryRef.current, slot);
     if (!next) return;
@@ -691,8 +691,51 @@ export default function SekaerthGame() {
     void saveRun().catch(() => {});
   }, [say, buzz, updateHud, saveRun]);
 
+  /** Kits and consumables perform one action on press, not one per simulation frame. */
+  const activateHotbar = useCallback((): boolean => {
+    const slot = hotbarSlot, stack = inventoryRef.current[slot];
+    if (!stack) return false;
+    if (stack.id === 'workbench_kit' || stack.id === 'hearth_kit') {
+      const w = worldRef.current, p = playerRef.current;
+      if (w.get(p.x, p.y) !== T.AIR) { say('STAND ON AN OPEN TILE TO PLACE A STATION'); return true; }
+      if (stack.id === 'hearth_kit' && w.hearths.some(h => h.x === p.x && h.y === p.y)) {
+        say('A HEARTH ALREADY OCCUPIES THIS TILE'); return true;
+      }
+      const next = consumeSlot(inventoryRef.current, slot);
+      if (!next) return true;
+      const workbench = stack.id === 'workbench_kit';
+      w.set(p.x, p.y, workbench ? T.WORKBENCH : T.HEARTH);
+      if (!workbench) w.hearths.push({ x: p.x, y: p.y });
+      inventoryRef.current = next;
+      publishInventory(n => n + 1);
+      soundRef.current.hearth(); buzz(20);
+      say(workbench ? 'WORKBENCH PLACED - PRESS INTERACT TO CRAFT' : `HEARTH PLACED - UP TO ${HEARTH_HEAT} HEAT`);
+      void saveRun().catch(() => {});
+      return true;
+    }
+    if (stack.id === 'bloom' || stack.id === 'warm_tonic') {
+      useInventoryItem(slot); return true;
+    }
+    return false;
+  }, [hotbarSlot, useInventoryItem, say, saveRun, buzz]);
+
+  const interact = useCallback(() => {
+    if (phase !== 'play') return;
+    if (workbenchNearby()) {
+      openBackpack('craft', 'workbench');
+      say('WORKBENCH READY - SELECT A RECIPE');
+      return;
+    }
+    const w = worldRef.current, p = playerRef.current;
+    const nearHearth = w.hearths.some(h => Math.hypot(h.x - p.x, h.y - p.y) <= 2.5);
+    if (nearHearth) {
+      const c = climateAt(p.x, p.y, w.radius, w.hearths);
+      say(`HEARTH - ${c.hearthHeat} HEAT / ${c.ambientCold} COLD`);
+    } else say('NO STATION NEARBY TO INTERACT WITH');
+  }, [phase, workbenchNearby, openBackpack, say]);
+
   const makeRecipe = useCallback((id: string) => {
-    const result = craftItem(inventoryRef.current, id, workbenchNearby());
+    const result = craftItem(inventoryRef.current, id, craftingMode === "workbench" && workbenchNearby());
     if (result.ok === false) {
       const warning = { station: 'WORKBENCH REQUIRED', ingredients: 'MORE MATERIALS REQUIRED', space: 'NOT ENOUGH BACKPACK SPACE', recipe: 'UNKNOWN RECIPE' };
       say(warning[result.reason]); return;
@@ -703,17 +746,19 @@ export default function SekaerthGame() {
     soundRef.current.hearth(); buzz(12);
     say(`CRAFTED: ${recipe.name.toUpperCase()}`);
     void saveRun().catch(() => {});
-  }, [workbenchNearby, saveRun, say, buzz]);
+  }, [workbenchNearby, craftingMode, saveRun, say, buzz]);
 
   const equipItem = useCallback((slot: number) => {
     const result = equipFromBag(inventoryRef.current, equipmentRef.current, slot);
     if (!result) { say('CANNOT EQUIP THAT ITEM'); return; }
     inventoryRef.current = result.inventory;
     equipmentRef.current = result.equipment;
+    pickRef.current = equippedPickTier(result.equipment);
+    updateHud();
     publishInventory((n) => n + 1); buzz(12);
     say('GEAR EQUIPPED');
     void saveRun().catch(() => {});
-  }, [say, buzz, saveRun]);
+  }, [say, buzz, saveRun, updateHud]);
 
   const unequipItem = useCallback((slot: EquipmentSlot) => {
     const result = unequipToBag(inventoryRef.current, equipmentRef.current, slot);
@@ -740,32 +785,63 @@ export default function SekaerthGame() {
     say('STACK DISCARDED. SPACE FREED.');
   }, [say]);
 
-  const upgradePick = useCallback(() => {
-    if (phase !== "play") return;
-    const t = pickRef.current;
-    if (t >= 3) { say("YOUR PICK IS FULLY FORGED"); return; }
-    const cost = PICK_COST[t + 1];
-    if (gemsRef.current < cost) { say(`NEED ${cost} GEMS FOR THE ${PICK_NAME[t + 1]}`); return; }
-    gemsRef.current -= cost;
-    pickRef.current = t + 1;
-    soundRef.current.hearth();
-    buzz(30);
-    say(`${PICK_NAME[t + 1]} FORGED — TIER ${t + 1}!`);
-  }, [phase, say, buzz]);
-
-  const placeHearth = useCallback(() => {
-    if (phase !== "play") return;
+  /** Shared mining routine for ACT and optional Auto-Dig movement. */
+  const mineTile = useCallback((nx: number, ny: number) => {
     const w = worldRef.current;
-    const p = playerRef.current;
-    if (gemsRef.current < HEARTH_COST) { say(`NEED ${HEARTH_COST} GEMS FOR A HEARTH`); return; }
-    if (w.get(p.x, p.y) !== T.AIR) { say("STAND IN OPEN ROCK TO PLANT A HEARTH"); return; }
-    w.set(p.x, p.y, T.HEARTH);
-    w.hearths.push({ x: p.x, y: p.y });
-    gemsRef.current -= HEARTH_COST;
-    soundRef.current.hearth();
-    buzz(30);
-    say("YOU PLANT A HEARTH. THE ROCK GLOWS.");
-  }, [phase, say, buzz]);
+    const target = w.get(nx, ny);
+    if (!diggable(target)) return;
+    const st = blockStats(target, nx, ny, w.radius);
+    if (st.tier > pickRef.current) {
+      const tk = 't' + nx + ',' + ny;
+      if (!digRef.current[tk]) {
+        digRef.current[tk] = 1;
+        say(`ARMORED BLOCK - NEED A TIER ${st.tier} PICK FROM A WORKBENCH`);
+      }
+      return;
+    }
+    const drop = dropForBlock(target);
+    if (drop && !canAddItem(inventoryRef.current, drop)) {
+      const warning = `${nx},${ny}`;
+      if (fullBagWarningRef.current !== warning) {
+        say('BACKPACK FULL - OPEN BAG TO MAKE ROOM');
+        fullBagWarningRef.current = warning;
+      }
+      return;
+    }
+    fullBagWarningRef.current = null;
+    digAnimRef.current = { x: nx, y: ny, t: Date.now() };
+    if (Math.random() < 0.5) particlesRef.current.push({
+      x: nx * TILE + TILE / 2, y: ny * TILE + TILE / 2,
+      vx: (Math.random() - 0.5) * 2, vy: -Math.random() * 1.5,
+      life: 1, color: '#ffcf8b',
+    });
+    const dm = w.addDmg(nx, ny, digStrength(equipmentRef.current));
+    if (dm % 2 === 0) soundRef.current.dig();
+    if (dm < st.hp) return;
+    w.clearDmg(nx, ny);
+    w.set(nx, ny, T.AIR);
+    soundRef.current.breakTile(); buzz(8);
+    if (drop) {
+      inventoryRef.current = addItem(inventoryRef.current, drop, 1).inventory;
+      publishInventory(n => n + 1);
+    }
+    if (target === T.GEM) {
+      gemsRef.current++;
+      soundRef.current.gem(); buzz(20);
+      say('GEM +1, CRYSTAL SHARD +1');
+    } else if ((target === T.OBSID || target === T.HARD) && drop) {
+      say(`${ITEMS[drop].name.toUpperCase()} COLLECTED`);
+    }
+  }, [say, buzz]);
+
+  const startAct = useCallback(() => {
+    if (phase !== 'play') return;
+    soundRef.current.ensure();
+    // Placeable items are single-shot on press; a held ACT mines continuously.
+    const singleUse = activateHotbar();
+    actHeldRef.current = !singleUse;
+  }, [phase, activateHotbar]);
+
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -779,23 +855,23 @@ export default function SekaerthGame() {
         return;
       }
       if (k === 'c' && phase === 'play' && !e.repeat) { openBackpack('craft'); return; }
-      if (k === 'e' && phase === 'play' && !e.repeat) { openBackpack('gear'); return; }
-      if (k === "h") placeHearth();
-      if (k === "u") upgradePick();
+      if (k === 'e' && phase === 'play' && !e.repeat) { interact(); return; }
+      if ((k === ' ' || k === 'f') && phase === 'play' && !e.repeat) { startAct(); return; }
+      if (k === ' ' || k === 'f') return;
       if (k === "escape") {
         if (phase === "play") { setPhase("paused"); void saveRun().catch(() => {}); }
         else if (phase === "inventory") { setPhase("play"); }
         else if (phase === "paused") setPhase("play");
       }
     };
-    const up = (e: KeyboardEvent) => { keysRef.current[e.key.toLowerCase()] = false; };
+    const up = (e: KeyboardEvent) => { keysRef.current[e.key.toLowerCase()] = false; if (e.key === ' ' || e.key.toLowerCase() === 'f') actHeldRef.current = false; };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [phase, placeHearth, upgradePick, saveRun, openBackpack]);
+  }, [phase, interact, startAct, saveRun, openBackpack]);
 
   // ----- sim tick -----
   useEffect(() => {
@@ -828,6 +904,7 @@ export default function SekaerthGame() {
       const { x: dx, y: dy } = gridStep(input, (x, y) => passable(w.get(p.x + x, p.y + y)));
 
       if (dx !== 0 || dy !== 0) {
+        aimRef.current = { x: dx, y: dy };
         if (dx !== 0) p.facing = dx;
         const nx = p.x + dx, ny = p.y + dy;
         const target = w.get(nx, ny);
@@ -845,70 +922,21 @@ export default function SekaerthGame() {
             buzz(8);
             say('WARM BLOOM COLLECTED - USE IT FROM YOUR BACKPACK');
           }
-        } else if (diggable(target)) {
-          const st = blockStats(target, nx, ny, w.radius);
-          if (st.tier > pickRef.current) {
-            // armored block — needs a better pick (mention once per block)
-            const tk = "t" + nx + "," + ny;
-            if (!digRef.current[tk]) {
-              digRef.current[tk] = 1;
-              say(`ARMORED BLOCK — NEED A TIER ${st.tier} PICK (PRESS U)`);
-            }
-          } else {
-            const drop = dropForBlock(target);
-            if (drop && !canAddItem(inventoryRef.current, drop)) {
-              const warning = `${nx},${ny}`;
-              if (fullBagWarningRef.current !== warning) {
-                say('BACKPACK FULL - OPEN BAG TO MAKE ROOM');
-                fullBagWarningRef.current = warning;
-              }
-              // Retain both the tile and its damage if collection cannot fit.
-              // No mined materials are destroyed or dropped invisibly.
-            } else {
-              fullBagWarningRef.current = null;
-              digAnimRef.current = { x: nx, y: ny, t: Date.now() };
-              if (Math.random() < 0.5)
-                particlesRef.current.push({
-                  x: nx * TILE + TILE / 2, y: ny * TILE + TILE / 2,
-                  vx: (Math.random() - 0.5) * 2, vy: -Math.random() * 1.5,
-                  life: 1, color: "#ffcf8b",
-                });
-              // damage sticks to the block (Terraria-style), 10 visual states
-              const dm = w.addDmg(nx, ny, digStrength(equipmentRef.current));
-              if (dm % 2 === 0) soundRef.current.dig();
-              if (dm >= st.hp) {
-                w.clearDmg(nx, ny);
-                w.set(nx, ny, T.AIR);
-                soundRef.current.breakTile();
-                buzz(8);
-                // Persistent world edit + item collection occur in the same
-                // synchronous tick, then one autosave snapshots both atomically.
-                if (drop) {
-                  inventoryRef.current = addItem(inventoryRef.current, drop, 1).inventory;
-                  publishInventory((n) => n + 1);
-                }
-                if (target === T.GEM) {
-                  gemsRef.current += 1;
-                  soundRef.current.gem();
-                  buzz(20);
-                  say('GEM +1, CRYSTAL SHARD +1');
-                } else if (target === T.OBSID || target === T.HARD) {
-                  say(`${ITEMS[drop!].name.toUpperCase()} COLLECTED`);
-                }
-              }
-            } // full bag guard
-          }
+        } else if (diggable(target) && (actHeldRef.current || opts.autoDig)) {
+          mineTile(nx, ny);
         }
       }
 
-      // warmth — colder toward the surface
+      // ACT can mine a facing block without holding a movement direction.
+      if (actHeldRef.current && dx === 0 && dy === 0) {
+        mineTile(p.x + aimRef.current.x, p.y + aimRef.current.y);
+      }
+
+      // A regional climate model: cold and nearby hearths are measured
+      // in the SAME heat units. A single hearth cannot cancel 500 cold.
       const r = Math.hypot(p.x, p.y);
-      const nearWarm =
-        r <= CORE_WARM_R ||
-        w.hearths.some((h) => Math.hypot(h.x - p.x, h.y - p.y) <= WARM_RADIUS);
-      const d = r / w.radius;
-      const delta = nearWarm ? 0.55 : -(0.015 + 0.08 * d) * coldDrainMultiplier(equipmentRef.current);
-      warmthRef.current = Math.min(100, Math.max(-1, warmthRef.current + delta));
+      const climate = climateAt(p.x, p.y, w.radius, w.hearths, coldDrainMultiplier(equipmentRef.current));
+      warmthRef.current = Math.min(100, Math.max(-1, warmthRef.current + climate.warmthDelta));
 
       if (warmthRef.current <= 0) {
         let best = w.hearths[0], bd = Infinity;
@@ -932,7 +960,7 @@ export default function SekaerthGame() {
       }
 
       // ambient embers
-      if (nearWarm && Math.random() < 0.25) {
+      if (climate.hearthHeat + climate.coreHeat > climate.ambientCold && Math.random() < 0.25) {
         particlesRef.current.push({
           x: p.x * TILE + (Math.random() - 0.5) * TILE * 7,
           y: p.y * TILE + (Math.random() - 0.5) * TILE * 7,
@@ -967,7 +995,7 @@ export default function SekaerthGame() {
       }
     }, TICK_MS);
     return () => clearInterval(interval);
-  }, [phase, say, buzz, saveRun, updateHud]);
+  }, [phase, say, buzz, saveRun, updateHud, mineTile, opts.autoDig]);
 
   // ----- canvas sizing: integer device-pixel scaling (crisp, no shimmer) -----
   useEffect(() => {
@@ -1137,13 +1165,6 @@ export default function SekaerthGame() {
 
       // player ember spirit
       const px = Math.round(r.x - camX), py = Math.round(r.y - camY + Math.sin(now / 400) * 1.5);
-      if (fx) {
-        const g = ctx.createRadialGradient(px + 6, py + 6, 2, px + 6, py + 6, TILE * 1.8);
-        g.addColorStop(0, "rgba(255,170,80,0.35)");
-        g.addColorStop(1, "rgba(255,170,80,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(px - TILE, py - TILE, TILE * 3, TILE * 3);
-      }
       const blink = (now / 3400) % 1 < 0.05;
       const sprite = p.facing < 0 ? PLAYER_FLIP : PLAYER_SPRITE;
       for (let sy2 = 0; sy2 < sprite.length; sy2++) {
@@ -1158,14 +1179,19 @@ export default function SekaerthGame() {
         }
       }
 
-      // cozy lamp falloff: dark far from the ember, warm near (FX high, underground only)
+      // Full-screen darkness composited in one offscreen layer. Multiple
+      // radial cutouts blend seamlessly - no player-sized rectangular clipping.
       if (fx && pr < w.radius - 24) {
-        const lg = ctx.createRadialGradient(px + 6, py + 6, 44, px + 6, py + 6, 210);
-        lg.addColorStop(0, "rgba(0,0,0,0)");
-        lg.addColorStop(0.6, "rgba(0,0,0,0.12)");
-        lg.addColorStop(1, "rgba(0,0,0,0.45)");
-        ctx.fillStyle = lg;
-        ctx.fillRect(0, 0, VIEW_W * TILE, VIEW_H * TILE);
+        const width = VIEW_W * TILE, height = VIEW_H * TILE;
+        const mask = lightingRef.current ?? (lightingRef.current = new LightingMask(width, height));
+        const lights = [{ x: px + 8, y: py + 8, radius: TILE * 7, strength: 1 }];
+        for (const hearth of w.hearths) {
+          const x = hearth.x * TILE - camX + 8;
+          const y = hearth.y * TILE - camY + 8;
+          if (x > -TILE * 7 && x < width + TILE * 7 && y > -TILE * 7 && y < height + TILE * 7)
+            lights.push({ x, y, radius: TILE * 6.5, strength: 0.85 });
+        }
+        mask.draw(ctx, 0.83, lights);
       }
 
       // HUD is now a readable, responsive DOM overlay in Sekampfire-style
@@ -1227,9 +1253,9 @@ export default function SekaerthGame() {
               </div>
               <button type="button" onClick={() => openBackpack('craft')}
                 className="seka-plaque pointer-events-auto flex w-[50px] shrink-0 flex-col items-center justify-center text-[10px] font-bold tracking-wider text-amber-100 active:bg-amber-300/25"
-                aria-label="Open crafting recipes">
+                aria-label="Hand crafting - workbench kits only">
                 <span className="text-base leading-none">⚒</span>
-                <span className="mt-1 text-[8px]">CRAFT</span>
+                <span className="mt-1 text-[8px]">HAND</span>
               </button>
               <button
                 type="button" onClick={() => openBackpack('bag')}
@@ -1251,6 +1277,7 @@ export default function SekaerthGame() {
             <div className="mt-1.5 grid grid-cols-[1.5fr_0.85fr_0.9fr] gap-1.5">
               <div className="seka-plaque min-w-0 px-2 py-1.5">
                 <div className="flex items-center justify-between text-[9px] text-amber-100/80"><span>WARMTH</span><strong className="text-amber-100">{hud.warmth}%</strong></div>
+                <div className="mt-0.5 text-[8px] text-amber-100/65">COLD {hud.cold} · HEAT {hud.heat}</div>
                 <div className="mt-1 h-[5px] overflow-hidden border border-stone-500/60 bg-stone-950/80">
                   <div className="h-full transition-[width] duration-200" style={{ width: `${hud.warmth}%`, background: hud.warmth < 25 ? "#e37a72" : "#eab266" }} />
                 </div>
@@ -1276,7 +1303,7 @@ export default function SekaerthGame() {
             {inventoryRef.current.slice(0, HOTBAR_SLOTS).map((stack, index) => (
               <button key={index} type="button" aria-pressed={hotbarSlot===index}
                 aria-label={`Quick slot ${index+1}: ${stack ? `${ITEMS[stack.id].name}, ${stack.count}` : 'Empty'}`}
-                onClick={() => { setHotbarSlot(index); if (stack && ['bloom','warm_tonic','workbench_kit'].includes(stack.id)) useInventoryItem(index); }}
+                onClick={() => setHotbarSlot(index)}
                 className={`relative flex h-[34px] w-[34px] items-center justify-center border ${hotbarSlot===index ? 'border-amber-200 bg-amber-300/25' : 'border-amber-200/25 bg-black/40'}`}>
                 <ItemIcon stack={stack} small />
                 {stack && <span className="absolute bottom-0 right-0 bg-black/70 px-[2px] text-[8px] text-white">{stack.count}</span>}
@@ -1288,7 +1315,7 @@ export default function SekaerthGame() {
         {phase === "play" && (
           <>
             <div
-              role="group" aria-label="Touch movement thumbstick: drag to move or dig"
+              role="group" aria-label="Touch movement thumbstick: drag to move; optional auto-dig is in settings"
               data-testid="sekaerth-thumbstick"
               className="pointer-events-auto absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-2 z-20 h-[152px] w-[160px] touch-none select-none"
               onPointerDown={stickDown} onPointerMove={stickMove}
@@ -1307,23 +1334,24 @@ export default function SekaerthGame() {
                   <span className="text-[19px] leading-none text-amber-100/90">✦</span>
                 </div>
               </div>
-              <div className="absolute inset-x-0 bottom-0 text-center font-mono text-[9px] tracking-[0.16em] text-amber-100/70">DRAG TO MOVE / DIG</div>
+              <div className="absolute inset-x-0 bottom-0 text-center font-mono text-[9px] tracking-[0.16em] text-amber-100/70">DRAG TO MOVE</div>
             </div>
 
             <div className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-3 z-20 flex flex-col items-center gap-3 select-none">
-              <button type="button" onClick={upgradePick}
-                aria-label={`Forge pickaxe upgrade, current tier ${hud.pick}`}
-                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-0.5 rounded-full active:scale-95">
+              <button type="button" onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); startAct(); }}
+                onPointerUp={() => { actHeldRef.current = false; }}
+                onPointerCancel={() => { actHeldRef.current = false; }}
+                onLostPointerCapture={() => { actHeldRef.current = false; }}
+                aria-label="Act - mine, use selected item or place selected station"
+                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-1 rounded-full active:scale-95">
                 <PixelArt grid={PICK_GRID} colors={ICON_COLORS} px={2} />
-                <span className="font-mono text-[9px] font-bold text-violet-100">FORGE</span>
-                <span className="font-mono text-[8px] text-amber-100/75">{hud.pick < 3 ? `${PICK_COST[hud.pick + 1]} GEMS` : "MAX"}</span>
+                <span className="font-mono text-[10px] font-bold text-amber-100">ACT</span>
               </button>
-              <button type="button" onClick={placeHearth}
-                aria-label={`Place a hearth, costs ${HEARTH_COST} gems`}
-                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-0.5 rounded-full active:scale-95">
-                <PixelArt grid={FLAME_GRID} colors={ICON_COLORS} px={2} />
-                <span className="font-mono text-[9px] font-bold text-orange-100">HEARTH</span>
-                <span className="font-mono text-[8px] text-amber-100/75">{HEARTH_COST} GEMS</span>
+              <button type="button" onClick={interact}
+                aria-label="Interact with nearby workbench or hearth"
+                className="seka-action-button flex h-[68px] w-[68px] flex-col items-center justify-center gap-1 rounded-full active:scale-95">
+                <span className="text-[22px] leading-none text-amber-100" aria-hidden="true">✧</span>
+                <span className="font-mono text-[9px] font-bold text-amber-100">INTERACT</span>
               </button>
             </div>
           </>
@@ -1331,7 +1359,8 @@ export default function SekaerthGame() {
 
         {phase === 'inventory' && <InventoryPanel key={inventoryTab}
           inventory={inventoryRef.current} warmth={warmthRef.current}
-          equipment={equipmentRef.current} nearWorkbench={workbenchNearby()} initialTab={inventoryTab}
+          equipment={equipmentRef.current} nearWorkbench={craftingMode === 'workbench' && workbenchNearby()}
+          initialTab={inventoryTab}
           onMove={moveInventory} onUse={useInventoryItem} onDiscard={discardInventory}
           onEquip={equipItem} onUnequip={unequipItem} onCraft={makeRecipe}
           onClose={() => setPhase('play')} />} 
@@ -1503,22 +1532,23 @@ export default function SekaerthGame() {
               <li>EVERY DIRECTION IS "UP" — DIG ANY WAY.</li>
               <li>THE ARROW ALWAYS POINTS TO THE SUN.</li>
               <li>1 BLOCK = 1 METER. CHOOSE THE PLANET RADIUS WHEN STARTING.</li>
-              <li>WASD / ARROWS OR DRAG THE THUMBSTICK TO MOVE AND DIG.</li>
+              <li>MOVE WITH THE THUMBSTICK. HOLD ACT TO MINE; E / INTERACT OPENS NEARBY STATIONS.</li>
               <li>BLOCKS HAVE HP — DAMAGE STICKS (10 STATES).</li>
               <li>GRAY HARDSTONE NEEDS TIER 2, OBSIDIAN TIER 3.</li>
-              <li>U OR BUTTON — FORGE A BETTER PICK (COSTS GEMS).</li>
-              <li>H OR BUTTON - PLANT A HEARTH (5 GEMS). WARM LIGHT. SAVE POINT.</li>
+              <li>HAND-CRAFT A WORKBENCH KIT FROM STONE, THEN PLACE IT WITH ACT.</li>
+              <li>INTERACT WITH THE WORKBENCH TO CRAFT HEARTHS, PICKAXES AND GEAR.</li>
+              <li>HEARTHS GIVE LIMITED HEAT. MORE HEARTHS MAY BE NEEDED IN COLD REGIONS.</li>
               <li>I / B OR BAG BUTTON - OPEN YOUR 24-SLOT BACKPACK.</li>
-              <li>C OR CRAFT BUTTON - CRAFT A WORKBENCH KIT AND WARM TONICS.</li>
-              <li>PLACE A WORKBENCH THEN RETURN TO CRAFTING FOR EQUIPMENT.</li>
+              <li>C OR HAND BUTTON - CRAFT ONLY BASIC WORKBENCH KITS.</li>
+              <li>INTERACT NEAR A WORKBENCH TO OPEN ADVANCED RECIPES.</li>
               <li>ROOT CLOAK SLOWS COLD LOSS. MINER'S GLOVES SPEED UP DIGGING.</li>
-              <li>E - OPEN EQUIPMENT. GEAR IS SAVED PER WORLD.</li>
+              <li>E - INTERACT. TO VIEW GEAR, OPEN BAG, THEN EQUIPMENT.</li>
               <li>TAP A STACK, THEN ANOTHER SLOT TO SWAP OR MERGE.</li>
               <li>THE FIRST 5 SLOTS MAKE UP THE QUICKBAR.</li>
               <li>MINED BLOCKS YIELD MATERIALS. WARM BLOOMS RESTORE WARMTH WHEN USED.</li>
               <li>EACH PLANET HAS ITS OWN NAME AND SAVE SLOT.</li>
               <li>WORLD CHANGES AUTOSAVE IN SEPARATE CHUNK RECORDS.</li>
-              <li>HEARTHS REFILL WARMTH. COLD = NAP.</li>
+              <li>AMBIENT COLD DRAINS WARMTH; HEARTHS SUPPLY 50 HEAT EACH AT CLOSE RANGE.</li>
               <li>REACH THE GRASS RING. SEE THE SUN. WIN.</li>
             </ul>
             <button className={btn} onClick={back}>◀ Back</button>
@@ -1547,6 +1577,9 @@ export default function SekaerthGame() {
               </label>
               <button className={btn} onClick={() => setOpts((o) => ({ ...o, haptic: !o.haptic }))}>
                 Haptics: {opts.haptic ? "On" : "Off"}
+              </button>
+              <button className={btn} onClick={() => setOpts((o) => ({ ...o, autoDig: !o.autoDig }))}>
+                Auto-Dig: {opts.autoDig ? "On" : "Off"}
               </button>
               <p className="border border-amber-200/15 bg-amber-950/20 p-3 text-[10px] leading-relaxed text-amber-100/70">
                 Your worlds now save separately. Manage or delete them from My Worlds on the main menu.
