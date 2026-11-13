@@ -87,6 +87,6 @@ test('v7 equipment persists without rewriting legacy v5 worlds', async () => {
   await writeWorld(meta, []);
   const loaded = await readWorld(meta.id);
   assert.deepEqual(loaded?.equipment,meta.equipment);
-  assert.equal(loaded?.v, 6);
+  assert.equal(loaded?.v, SAVE_FORMAT);
   await removeWorld(meta.id);
 });
