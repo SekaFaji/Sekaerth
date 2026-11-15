@@ -1,75 +1,72 @@
-# Sekaerth 🌍
+# Sekaerth
 
-**Created by SekaFaji Games** | **Version 3.6 - Survival & Interaction**
+**A mobile-first, 2D planetary survival and exploration game by SekaFaji Games.**
 
-A mobile-first, 2D pixel-art planet adventure. Begin near the heart of a procedurally generated planet, mine resources, craft and upgrade equipment, establish workbenches and warm shelters, and journey toward sunlight. Inspired by sandbox exploration and survival games, with its own radial-world progression.
+Start near the heart of a procedurally generated planet. Mine your way outward, gather resources, craft equipment, establish warm shelters and work toward the sunlight. Each world has its own seed, player progress and modifications.
 
-**Play Sekaerth:** https://sekafaji.github.io/Sekaerth/
+**[Play Sekaerth](https://sekafaji.github.io/Sekaerth/)** · [Development guide](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Changelog](CHANGELOG.md)
 
-## Current features
+## Highlights
 
-- Six world sizes from Tiny (1,600 m radius) to experimental Real-Size Earth (6,371 km radius). One block is one meter.
-- Procedurally generated terrain with deterministic seeds, 16×16 chunks and separately persisted player modifications.
-- Named worlds and independent browser saves (IndexedDB), legacy-save migration and incremental saves.
-- Cursed Project-inspired floating movement thumbstick and a compact, semi-transparent HUD.
-- **ACT** to mine or use/place the selected quickbar item; **INTERACT** near a workbench for advanced crafting. Optional Auto-Dig in Settings.
-- A 24-slot inventory, five-slot quickbar, stackable resources, equipped tools, body and hand gear.
-- Hand-craft a **Workbench Kit** using Stone, place it, and interact with it to craft pickaxes, Hearth Kits, clothing and consumables.
-- Climate based on world position and biome; hearths produce limited, overlapping heat rather than giving unlimited immunity to cold.
-- Radial player and hearth lighting and dedicated pixel-art item icons.
+- **Six world sizes:** Tiny, Small, Medium, Large, Huge and experimental Real-Size Earth. World dimensions range from a 1.6 km to a 6,371 km radius.
+- **Mobile-first input:** floating thumbstick, ACT and INTERACT, with optional Auto-Dig and keyboard support.
+- **Survival progression:** climate and biome-dependent cold, finite overlapping hearth heat, crafted gear and workbenches.
+- **Sandbox foundations:** deterministic 16×16 terrain chunks, block mining, 24-slot inventory, five quick slots, resources and consumables.
+- **World persistence:** multiple named worlds and incremental, per-chunk IndexedDB saves; compatible with existing worlds.
 
-## New in v3.6
+> Real-Size Earth uses Earth-scale dimensions but is not a simulation of real Earth geography or geology. This is an early playable game with more building and exploration systems planned.
 
-- Removed direct gem-powered **Forge** and **Hearth** actions from the HUD. Those items are now crafted at workbenches.
-- Added **ACT** and **INTERACT** controls. ACT mines when held and places selected crafting kits with a single press. E / Space / F provide desktop equivalents.
-- Hand crafting only offers the Workbench Kit; interact with a placed station for other recipes.
-- A Basic Pickaxe is equipped by default. Crafted Stone and Crystal Pickaxes are equipped from the Backpack. Existing tier-2/3 saves retain their pickaxe tier through migration.
-- Added ambient cold and a **50-heat-output hearth** (with 7-block falloff), gear resistance and warmth recovery when shelter overcomes cold.
-- Replaced square-cut player lighting and placeholder inventory letter tiles with a composited radial lighting system and item pixel art.
+## Controls
 
-See [v3.6 release notes](docs/V3_6_SURVIVAL.md) and [architecture documentation](docs/ARCHITECTURE.md).
+| Action | Touch | Keyboard |
+| --- | --- | --- |
+| Move | Thumbstick | WASD / arrows |
+| Mine, use or place selected item | ACT | Space / F |
+| Use a nearby workbench or hearth | INTERACT | E |
+| Basic crafting | HAND | C |
+| Inventory and equipment | BAG | I / B |
+| Pause / settings | MENU | Esc |
 
-## World sizes
+Hand-craft a Workbench Kit from Stone, place it using ACT, then use INTERACT nearby to access the workbench recipes.
 
-| World | Radius | Diameter |
-| --- | ---: | ---: |
-| Tiny | 1.6 km | 3.2 km |
-| Small | 3.2 km | 6.4 km |
-| Medium | 6.4 km | 12.8 km |
-| Large | 12.8 km | 25.6 km |
-| Huge | 25.6 km | 51.2 km |
-| Real-Size Earth (experimental) | 6,371 km | 12,742 km |
+## Running locally
 
-World dimensions are Earth-scale in the last mode, but biome distribution, geology and travel speeds are intentionally game-like.
-
-## Mobile controls
-
-- **Thumbstick:** move. Movement does not mine unless Auto-Dig is enabled.
-- **ACT:** hold to mine; tap to place a Workbench/Hearth Kit from the selected quick slot or use a consumable.
-- **INTERACT:** open the workbench when standing nearby; inspect a hearth.
-- **HAND:** make a Workbench Kit from Stone. **BAG:** inventory, equipment and quickbar organization. **MENU:** settings, saving and exit.
-- **Keyboard:** WASD/arrows to move, Space/F for ACT, E to INTERACT, C for HAND, I/B for BAG, Esc for pause.
-
-## Development
-
-Node.js 22+:
+Node.js **22+** is required.
 
 ```sh
 npm install
-npm test
-npm run typecheck
-npm run build
 npm run dev
 ```
 
-Automated validation runs on pull requests; pushes to `main` also build and publish GitHub Pages. The project uses React, TypeScript, Vite, Tailwind and browser IndexedDB.
+Open the URL shown by Vite. Before opening a pull request, validate with:
 
-## Save-data safety
+```sh
+npm run check
+```
 
-World changes are chunk deltas; generated terrain is regenerated from its seed. Each world has its own inventory, equipment, position, explored edits and crafted stations. Existing worlds from v3.3-v3.5 load without an IndexedDB schema reset; old pickaxe tiers are restored into actual equipment.
+This runs the Node unit tests, TypeScript verification and production build. GitHub Actions checks pull requests, then builds and deploys `main` to GitHub Pages. The workflows do not publish development ZIP backups.
 
-**Important:** Browser data is local to each site and device. Clearing site data can remove worlds. Manual export/import and cloud backup are **not yet implemented**. Huge numbers of structures and player edits will require further storage performance profiling, especially on phones.
+## Project structure
 
-## Planned features
+| Directory | Responsibility |
+| --- | --- |
+| `src/world/` | Procedural terrain and chunk simulation |
+| `src/persistence/` | World databases, migrations and local preferences |
+| `src/items/`, `src/crafting/` | Inventory, equipment and recipes |
+| `src/survival/` | Climate, cold and heat |
+| `src/rendering/` | Lighting, tiles and player sprite data |
+| `src/audio/` | Procedural game audio |
+| `src/ui/` | Inventory interface, thumbstick and icon components |
+| `src/SekaerthGame.tsx` | Main simulation and screen orchestration (remaining extraction in progress) |
 
-Precise building/block placement, storage chests, mining/interaction animations, more stations, equipment variety, biome-specific discoveries, advanced climate and fuel systems, and manual save export/import. These are planned - not represented as completed functionality.
+See [architecture notes](docs/ARCHITECTURE.md) for the save transaction and world-loading behavior.
+
+## Save safety and limitations
+
+Worlds are stored **on the current device and browser origin**, not in a cloud account. Deleting website storage or changing device can remove them. **World export/import is not implemented yet.** Keep browser site data intact until backups are supported.
+
+The large-world storage design persists modified chunks rather than generated terrain, but exceptionally long playthroughs and thousands of modified chunks still need device profiling.
+
+## Studio
+
+**Developed by SekaFaji Games.**

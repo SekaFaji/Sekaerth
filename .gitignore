@@ -1,7 +1,15 @@
+# Dependencies and generated output
 node_modules/
 dist/
+coverage/
+*.tsbuildinfo
 *.log
-.DS_Store
+
+# Local secrets and editor/system files
 .env
 .env.*
 !.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

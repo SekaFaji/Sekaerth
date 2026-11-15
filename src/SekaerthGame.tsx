@@ -1,9 +1,14 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { Sound } from "./audio/Sound";
+import PixelArt, { FLAME_GRID, PICK_GRID, ICON_COLORS } from "./ui/PixelArt";
+import { buildTileset, type Tileset } from "./rendering/tileset";
+import { PLAYER_SPRITE, PLAYER_FLIP, SPR } from "./rendering/playerSprite";
+import { loadOptions, saveOptions, type Opts } from "./persistence/options";
 import { gridStep, thumbVector, JOYSTICK_RADIUS, type Axes } from "./ui/joystick";
 import { World } from "./world/World";
 import { WORLD_SIZES, WORLD_SIZE_BY_ID, type WorldSize, distanceLabel, CHUNK, TILE, VIEW_W, VIEW_H,
   TICK_MS, T, diggable, passable,
-  blockStats, biome, BIOME_KEYS, BIOME_ROCKS, hash2, shade } from "./world/terrain";
+  blockStats, biome, hash2 } from "./world/terrain";
 import { SAVE_FORMAT, listWorlds, readWorld, readChunk, listModifiedKeys, writeWorld,
   removeWorld, migrateLegacyWorld, newWorldId, storageEstimate, type WorldSave } from "./persistence/worldDb";
 import { ITEMS, INVENTORY_SLOTS, HOTBAR_SLOTS, type Inventory, emptyInventory,
@@ -15,322 +20,12 @@ import { coldDrainMultiplier, digStrength, emptyEquipment, normalizeEquipment, e
 import { climateAt, HEARTH_HEAT } from "./survival/cold";
 import { LightingMask } from "./rendering/lighting";
 
-// ============================================================
-// SEKAERTH v3.6 - cozy dig-out-of-the-planet with selectable world sizes.
-// 1 block = 1 meter. You start at the center of a round planet.
-// Terrain generates on demand so even Earth-scale coordinates don't
-// require allocating the planet upfront. Reach the sun to win.
-// ============================================================
+// Sekaerth gameplay orchestration: simulation, input, camera and screens.
+// Terrain, assets, audio, preferences and persistence are maintained in separate modules.
 
-// ---------- UI options ----------
-const SAVE_OPTS = "sekaerth-opts-v1";
-const LEGACY_SAVE_OPTS = "sunward-opts-v1";
+// ---------- game orchestration ----------
 const AUTOSAVE_TICKS = 50;
-const store = {
-  get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
-};
-function readStoredWithLegacy(key: string, legacyKey: string) {
-  const existing = store.get(key);
-  if (existing !== null) return existing;
-  const old = store.get(legacyKey);
-  if (old !== null) store.set(key, old);
-  return old;
-}
-
-// ---------- 3x5 pixel font ----------
-const FONT: Record<string, string[]> = {
-  A: ["010", "101", "111", "101", "101"], B: ["110", "101", "110", "101", "110"],
-  C: ["011", "100", "100", "100", "011"], D: ["110", "101", "101", "101", "110"],
-  E: ["111", "100", "110", "100", "111"], F: ["111", "100", "110", "100", "100"],
-  G: ["011", "100", "101", "101", "011"], H: ["101", "101", "111", "101", "101"],
-  I: ["111", "010", "010", "010", "111"], J: ["001", "001", "001", "101", "010"],
-  K: ["101", "101", "110", "101", "101"], L: ["100", "100", "100", "100", "111"],
-  M: ["101", "111", "111", "101", "101"], N: ["111", "101", "101", "101", "101"],
-  O: ["010", "101", "101", "101", "010"], P: ["110", "101", "110", "100", "100"],
-  Q: ["010", "101", "101", "010", "001"], R: ["110", "101", "110", "101", "101"],
-  S: ["011", "100", "010", "001", "110"], T: ["111", "010", "010", "010", "010"],
-  U: ["101", "101", "101", "101", "111"], V: ["101", "101", "101", "101", "010"],
-  W: ["101", "101", "111", "111", "101"], X: ["101", "101", "010", "101", "101"],
-  Y: ["101", "101", "010", "010", "010"], Z: ["111", "001", "010", "100", "111"],
-  "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
-  "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],
-  "4": ["101", "101", "111", "001", "001"], "5": ["111", "100", "111", "001", "111"],
-  "6": ["111", "100", "111", "101", "111"], "7": ["111", "001", "010", "010", "010"],
-  "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "111"],
-  " ": ["000", "000", "000", "000", "000"], "-": ["000", "000", "111", "000", "000"],
-  ":": ["000", "010", "000", "010", "000"], ".": ["000", "000", "000", "000", "010"],
-  "/": ["001", "001", "010", "100", "100"],
-};
-function textWidth(s: string, scale: number) { return s.length * 4 * scale - scale; }
-function drawText(
-  ctx: CanvasRenderingContext2D, s: string, x: number, y: number,
-  color: string, scale = 1, shadow = true,
-) {
-  const str = s.toUpperCase();
-  if (shadow) drawTextRaw(ctx, str, x + scale, y + scale, "#000000", scale);
-  drawTextRaw(ctx, str, x, y, color, scale);
-}
-function drawTextRaw(
-  ctx: CanvasRenderingContext2D, s: string, x: number, y: number, color: string, scale: number,
-) {
-  ctx.fillStyle = color;
-  for (let i = 0; i < s.length; i++) {
-    const g = FONT[s[i]];
-    if (!g) continue;
-    for (let r = 0; r < 5; r++)
-      for (let c = 0; c < 3; c++)
-        if (g[r][c] === "1") ctx.fillRect(x + i * 4 * scale + c * scale, y + r * scale, scale, scale);
-  }
-}
-
-// ---------- pixel tileset ----------
-type Tileset = Record<string, HTMLCanvasElement[]>;
-function makeTile(draw: (ctx: CanvasRenderingContext2D) => void) {
-  const c = document.createElement("canvas");
-  c.width = TILE; c.height = TILE;
-  const ctx = c.getContext("2d");
-  if (ctx) draw(ctx);
-  return c;
-}
-function rockTile(base: string): HTMLCanvasElement {
-  return makeTile((ctx) => {
-    ctx.fillStyle = base; ctx.fillRect(0, 0, TILE, TILE);
-    const dark = shade(base, 0.74), light = shade(base, 1.3);
-    // organic speckles, no grid edges — tiles must merge into rock masses
-    for (let i = 0; i < 9; i++) {
-      ctx.fillStyle = Math.random() < 0.55 ? dark : light;
-      const s = Math.random() < 0.3 ? 2 : 1;
-      ctx.fillRect(Math.floor(Math.random() * (TILE - 2)), Math.floor(Math.random() * (TILE - 2)), s, s);
-    }
-    // occasional hairline crack
-    if (Math.random() < 0.45) {
-      ctx.fillStyle = shade(base, 0.6);
-      ctx.fillRect(2 + Math.floor(Math.random() * 8), 2 + Math.floor(Math.random() * 12), 4 + Math.floor(Math.random() * 4), 1);
-    }
-  });
-}
-function buildTileset(): Tileset {
-  const set: Tileset = {};
-  for (const k of BIOME_KEYS) set["rock_" + k] = [0, 1, 2, 3].map(() => rockTile(BIOME_ROCKS[k]));
-  set.sand = [makeTile((ctx) => {
-    ctx.fillStyle = "#d9a066"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#b5824d";
-    for (let y = 2; y < TILE; y += 4)
-      for (let x = (y % 8 === 2 ? 1 : 3); x < TILE; x += 6) ctx.fillRect(x, y, 2, 2);
-    ctx.fillStyle = "#e8bd85"; ctx.fillRect(0, 0, TILE, 1);
-  })];
-  set.root = [makeTile((ctx) => {
-    ctx.fillStyle = "#7a4e26"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#5c3a1c"; for (let x = 2; x < TILE; x += 5) ctx.fillRect(x, 0, 2, TILE);
-    ctx.fillStyle = "#94612f"; for (let x = 4; x < TILE; x += 7) ctx.fillRect(x, 0, 1, TILE);
-  })];
-  set.grass = [makeTile((ctx) => {
-    ctx.fillStyle = "#6b4a2a"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#4a8f3c"; ctx.fillRect(0, 4, TILE, TILE - 4);
-    ctx.fillStyle = "#5fae4a"; ctx.fillRect(0, 4, TILE, 3);
-    ctx.fillStyle = "#3c7a32";
-    for (let i = 0; i < 6; i++) ctx.fillRect(Math.floor(Math.random() * 14), 5 + Math.floor(Math.random() * 4), 2, 2);
-    ctx.fillStyle = "#7fd35f"; for (let x = 1; x < TILE; x += 5) ctx.fillRect(x, 1, 2, 3);
-  })];
-  set.workbench = [makeTile((ctx) => {
-    ctx.fillStyle = '#644c35'; ctx.fillRect(1, 6, 14, 5);
-    ctx.fillStyle = '#b98d5d'; ctx.fillRect(1, 4, 14, 3);
-    ctx.fillStyle = '#e1b27c'; ctx.fillRect(2, 4, 12, 1);
-    ctx.fillStyle = '#4d3525'; ctx.fillRect(3, 11, 2, 5); ctx.fillRect(11, 11, 2, 5);
-    ctx.fillStyle = '#dab582'; ctx.fillRect(4, 2, 7, 2);
-    ctx.fillStyle = '#7b5a40'; ctx.fillRect(7, 0, 2, 4);
-  })];
-  set.hearth = [makeTile((ctx) => {
-    ctx.fillStyle = "#3a2a2a"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#57403c";
-    ctx.fillRect(1, 1, 6, 6); ctx.fillRect(9, 1, 6, 6);
-    ctx.fillRect(1, 9, 6, 6); ctx.fillRect(9, 9, 6, 6);
-    ctx.fillStyle = "#241818"; ctx.fillRect(0, 7, TILE, 2); ctx.fillRect(7, 0, 2, TILE);
-    ctx.fillStyle = "#1a1010"; ctx.fillRect(0, TILE - 2, TILE, 2);
-  })];
-
-  // armored blocks
-  set.hard = [makeTile((ctx) => {
-    ctx.fillStyle = "#6a7686"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#8a97a8";
-    ctx.fillRect(2, 2, 5, 3); ctx.fillRect(9, 4, 4, 3); ctx.fillRect(4, 10, 6, 3);
-    ctx.fillStyle = "#4a5563";
-    ctx.fillRect(10, 11, 3, 3); ctx.fillRect(1, 8, 2, 2); ctx.fillRect(12, 1, 3, 2);
-    ctx.fillStyle = "#b8c4d2"; ctx.fillRect(3, 3, 2, 1); ctx.fillRect(10, 5, 2, 1);
-  })];
-  set.obsid = [makeTile((ctx) => {
-    ctx.fillStyle = "#241b30"; ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = "#161020";
-    ctx.fillRect(0, 12, 6, 4); ctx.fillRect(9, 0, 7, 5);
-    ctx.fillStyle = "#7c5ca8";
-    ctx.fillRect(2, 2, 1, 5); ctx.fillRect(3, 3, 1, 3); ctx.fillRect(11, 8, 1, 5);
-    ctx.fillStyle = "#a884d4";
-    ctx.fillRect(3, 2, 1, 1); ctx.fillRect(12, 9, 1, 1); ctx.fillRect(6, 11, 1, 1);
-  })];
-
-  // 10 progressive crack states (drawn over damaged blocks)
-  set.cracks = Array.from({ length: 10 }, (_, state) =>
-    makeTile((ctx) => {
-      const s = state + 1;
-      for (let arm = 0; arm < 3; arm++) {
-        const baseA = hash2(state * 7 + 1, arm * 13 + 5) * Math.PI * 2;
-        let x = 8, y = 8;
-        const len = 2 + Math.round((s / 10) * 6 * (0.6 + hash2(state, arm) * 0.8));
-        for (let j = 0; j < len; j++) {
-          const a = baseA + (hash2(state * 31 + j, arm) - 0.5) * 1.2;
-          x += Math.cos(a); y += Math.sin(a);
-          const cx2 = Math.max(0, Math.min(TILE - 1, Math.round(x)));
-          const cy2 = Math.max(0, Math.min(TILE - 1, Math.round(y)));
-          ctx.fillStyle = j % 3 === 0 ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.55)";
-          ctx.fillRect(cx2, cy2, 1, 1);
-        }
-      }
-      if (s >= 6) {
-        ctx.fillStyle = "rgba(0,0,0,0.4)";
-        ctx.fillRect(0, 0, 2, 1); ctx.fillRect(TILE - 2, TILE - 1, 2, 1);
-      }
-    }),
-  );
-  return set;
-}
-
-// player sprite: little ember spirit (12x12)
-const PLAYER_SPRITE = [
-  ".....YY.....",
-  "....YOO.....",
-  "....YOOO....",
-  "...OOOOOO...",
-  "..OOOOOOOO..",
-  ".OOOOOOOOOO.",
-  ".OKOOOOOKO..",
-  ".OOOOOOOOOO.",
-  "..OOOOOOOO..",
-  "...OOOOOO...",
-  "....OOOO....",
-  "....RRR.....",
-];
-const PLAYER_FLIP = PLAYER_SPRITE.map((r) => r.split("").reverse().join(""));
-const SPR: Record<string, string> = { Y: "#ffe08a", O: "#ff8c42", K: "#3a1a0a", R: "#c2410c" };
-
-// ---------- audio (procedural, sekampfire-style) ----------
-class Sound {
-  ctx: AudioContext | null = null;
-  master: GainNode | null = null;
-  vol = 0.7;
-  on = true;
-  ensure() {
-    if (this.ctx) { if (this.ctx.state === "suspended") void this.ctx.resume(); return; }
-    try {
-      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.on ? this.vol : 0;
-      this.master.connect(this.ctx.destination);
-    } catch { this.ctx = null; }
-  }
-  setVol(v: number) { this.vol = v; if (this.master) this.master.gain.value = this.on ? v : 0; }
-  setOn(b: boolean) { this.on = b; if (this.master) this.master.gain.value = b ? this.vol : 0; }
-  blip(freq: number, dur: number, type: OscillatorType, vol: number, slide = 0) {
-    if (!this.ctx || !this.master || !this.on) return;
-    const t = this.ctx.currentTime;
-    const o = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t);
-    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, t + dur);
-    g.gain.setValueAtTime(vol, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g); g.connect(this.master);
-    o.start(t); o.stop(t + dur + 0.02);
-  }
-  dig() { this.blip(70 + Math.random() * 50, 0.05, "square", 0.12); }
-  breakTile() { this.blip(140, 0.07, "square", 0.15, -60); }
-  gem() { this.blip(660, 0.08, "triangle", 0.2); setTimeout(() => this.blip(990, 0.1, "triangle", 0.2), 70); }
-  hearth() { this.blip(110, 0.5, "sawtooth", 0.15, 30); setTimeout(() => this.blip(880, 0.15, "triangle", 0.15), 200); }
-  nap() { this.blip(400, 0.5, "sine", 0.2, -250); }
-  ui() { this.blip(660, 0.04, "sine", 0.12); }
-  win() {
-    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.blip(f, 0.25, "triangle", 0.22), i * 130));
-  }
-}
-
-// ---------- pixel icons for the DOM UI (string-grid sprites, crisp edges) ----------
-function PixelArt({ grid, colors, px = 2, className }: {
-  grid: string[]; colors: Record<string, string>; px?: number; className?: string;
-}) {
-  const w = grid[0].length, h = grid.length;
-  return (
-    <svg
-      width={w * px} height={h * px} viewBox={`0 0 ${w} ${h}`}
-      shapeRendering="crispEdges" className={className} aria-hidden
-    >
-      {grid.flatMap((row, y) =>
-        row.split("").map((ch, x) => {
-          const c = colors[ch];
-          return c ? <rect key={x + "_" + y} x={x} y={y} width={1} height={1} fill={c} /> : null;
-        }),
-      )}
-    </svg>
-  );
-}
-const FLAME_GRID = [
-  "....Y...",
-  "...YY...",
-  "...OO...",
-  "..OOO...",
-  ".OOOOO..",
-  ".OOOOO..",
-  "OOOOOOO.",
-  "OOOOOOO.",
-  ".OOOOO..",
-  "..OOO...",
-];
-const PICK_GRID = [
-  "..GGGGGG..",
-  ".G......G.",
-  "G........G",
-  "....H.....",
-  "...H......",
-  "..H.......",
-  ".H........",
-  "H.........",
-];
-const PAUSE_GRID = [
-  "XX..XX",
-  "XX..XX",
-  "XX..XX",
-  "XX..XX",
-  "XX..XX",
-];
-const FS_GRID = [
-  "X......X",
-  "XX....XX",
-  "........",
-  "........",
-  "........",
-  "........",
-  "XX....XX",
-  "X......X",
-];
-const SUN_GRID = [
-  "...YY...",
-  ".Y.YY.Y.",
-  "..YYYY..",
-  "YYYYYYYY",
-  "YYYYYYYY",
-  "..YYYY..",
-  ".Y.YY.Y.",
-  "...YY...",
-];
-const ICON_COLORS: Record<string, string> = {
-  Y: "#ffe08a", O: "#ff8c42", G: "#9aa5b1", H: "#8a5a2b",
-  X: "#e8e0d0", L: "#fff7cc",
-};
-const SUN_COLORS: Record<string, string> = { Y: "#f59e0b" };
-
-// ---------- main ----------
 type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string };
-type Opts = { fxHigh: boolean; sound: boolean; vol: number; haptic: boolean; autoDig: boolean };
 
 export default function SekaerthGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -385,16 +80,10 @@ export default function SekaerthGame() {
   const [selectedWorld, setSelectedWorld] = useState<WorldSize>("tiny");
   const [winStats, setWinStats] = useState({ gems: 0, time: 0, radius: 1600 });
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
-  const [opts, setOpts] = useState<Opts>(() => {
-    try {
-      const raw = readStoredWithLegacy(SAVE_OPTS, LEGACY_SAVE_OPTS);
-      if (raw) return { fxHigh: true, sound: true, vol: 0.7, haptic: true, autoDig: false, ...JSON.parse(raw) };
-    } catch { /* ignore */ }
-    return { fxHigh: true, sound: true, vol: 0.7, haptic: true, autoDig: false };
-  });
+  const [opts, setOpts] = useState<Opts>(loadOptions);
 
   useEffect(() => {
-    store.set(SAVE_OPTS, JSON.stringify(opts));
+    saveOptions(opts);
     soundRef.current.setOn(opts.sound);
     soundRef.current.setVol(opts.vol);
   }, [opts]);
