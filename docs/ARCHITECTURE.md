@@ -83,3 +83,17 @@ Any new persistent gameplay field must have a default for migrated saves and a t
 - The mobile quickbar selects an action item. ACT holds mining or places/uses a selected kit; INTERACT opens a nearby workbench. Auto-Dig is an optional saved preference (off by default for new settings).
 - `src/ui/itemArt.tsx` contains data-driven pixel-art silhouettes instead of letter tiles. This is an initial visual pass; crafted world objects still use the existing renderer.
 - Large worlds still save only changed chunks. Hearth positions remain metadata and will require a chunk-indexed representation if extremely large settlements become common.
+
+## Code organization (v3.6.1)
+
+The following sections were extracted from `SekaerthGame.tsx` without intentionally changing their behavior:
+
+- `src/audio/Sound.ts`: audio context and procedural effects.
+- `src/rendering/tileset.ts`: generated pixel tiles and damage states.
+- `src/rendering/playerSprite.ts`: player pixel data.
+- `src/ui/PixelArt.tsx`: DOM icon artwork for the main HUD.
+- `src/persistence/options.ts`: local browser preferences and legacy key import.
+
+`src/SekaerthGame.tsx` remains the coordinator for input, animation, simulation, save scheduling and screen state. Its future separation into simulation and view layers should preserve the existing world/save contracts, with regression tests for each extraction.
+
+The test suite includes explicit tests for preference migration and generated tiles, in addition to existing world, item, crafting, lighting, cold and persistence tests. Run `npm run check` before merging.
