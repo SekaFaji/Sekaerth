@@ -16,6 +16,12 @@ Start near the heart of a procedurally generated planet. Mine your way outward, 
 
 > Real-Size Earth uses Earth-scale dimensions but is not a simulation of real Earth geography or geology. This is an early playable game with more building and exploration systems planned.
 
+## Landscape and fullscreen (v3.6.2)
+
+Sekaerth fits the phone's available screen in portrait **and landscape**, expanding the world camera horizontally without distorting tiles. On landscape phones, the HUD forms a compact top row, while movement, ACT, INTERACT and the quickbar remain near the bottom edges.
+
+Use **Fullscreen** from the title menu, pause menu or Settings. Fullscreen uses the browser API where supported; some mobile browsers and embedded webviews may not allow it. Rotating to landscape works even when fullscreen is unavailable. The game respects screen safe areas and only requests a landscape orientation lock when the device is already in landscape.
+
 ## Controls
 
 | Action | Touch | Keyboard |
