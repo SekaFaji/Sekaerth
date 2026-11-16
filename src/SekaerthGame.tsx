@@ -19,6 +19,7 @@ import { craftItem, RECIPES } from "./crafting/recipes";
 import { coldDrainMultiplier, digStrength, emptyEquipment, normalizeEquipment, equipFromBag, unequipToBag, restoreLegacyPick, equippedPickTier, type Equipment, type EquipmentSlot } from "./items/equipment";
 import { climateAt, HEARTH_HEAT } from "./survival/cold";
 import { LightingMask } from "./rendering/lighting";
+import { measureGameViewport } from "./ui/viewport";
 
 // Sekaerth gameplay orchestration: simulation, input, camera and screens.
 // Terrain, assets, audio, preferences and persistence are maintained in separate modules.
@@ -81,6 +82,16 @@ export default function SekaerthGame() {
   const [winStats, setWinStats] = useState({ gems: 0, time: 0, radius: 1600 });
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const [opts, setOpts] = useState<Opts>(loadOptions);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenAvailable, setFullscreenAvailable] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    setFullscreenAvailable(typeof stageRef.current?.requestFullscreen === "function");
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
 
   useEffect(() => {
     saveOptions(opts);
@@ -686,34 +697,31 @@ export default function SekaerthGame() {
     return () => clearInterval(interval);
   }, [phase, say, buzz, saveRun, updateHud, mineTile, opts.autoDig]);
 
-  // ----- canvas sizing: integer device-pixel scaling (crisp, no shimmer) -----
+  // ----- responsive world viewport -----
+  // Canvas backing dimensions match the available screen ratio. This reveals
+  // more world horizontally in landscape without stretching tiles or sprites.
   useEffect(() => {
-    const el = stageRef.current;
-    if (!el) return;
-    const fit = () => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const resize = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const w = el.clientWidth, h = el.clientHeight;
-      if (w <= 0 || h <= 0) return;
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      const fitScale = Math.min(w / (VIEW_W * TILE), h / (VIEW_H * TILE));
-      // each game pixel becomes exactly k x k device pixels — no fractional shimmer
-      const k = Math.max(1, Math.floor(fitScale * dpr));
-      let cssW = (VIEW_W * TILE * k) / dpr;
-      let cssH = (VIEW_H * TILE * k) / dpr;
-      if (cssW > w || cssH > h) { // integer scale does not fit: plain contain
-        cssW = Math.floor(VIEW_W * TILE * fitScale);
-        cssH = Math.floor(VIEW_H * TILE * fitScale);
+      const { width, height } = measureGameViewport(stage.clientWidth, stage.clientHeight);
+      if (!width || !height) return;
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        lightingRef.current = null; // The lighting buffer must match the new world viewport.
       }
-      canvas.style.width = cssW + "px";
-      canvas.style.height = cssH + "px";
-      canvas.style.left = Math.round((w - cssW) / 2) + "px";
-      canvas.style.top = Math.round((h - cssH) / 2) + "px";
     };
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
-    fit();
-    return () => ro.disconnect();
+    const observer = new ResizeObserver(resize);
+    observer.observe(stage);
+    window.addEventListener("orientationchange", resize);
+    resize();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("orientationchange", resize);
+    };
   }, []);
 
   // ----- render loop -----
@@ -724,6 +732,8 @@ export default function SekaerthGame() {
       const canvas = canvasRef.current;
       const w = worldRef.current;
       if (!canvas || !w) return;
+      const viewW = canvas.width, viewH = canvas.height;
+      const tileCols = Math.ceil(viewW / TILE), tileRows = Math.ceil(viewH / TILE);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       if (!tilesetRef.current) tilesetRef.current = buildTileset();
@@ -735,20 +745,20 @@ export default function SekaerthGame() {
       const r = renderRef.current;
       r.x += (p.x * TILE - r.x) * 0.25;
       r.y += (p.y * TILE - r.y) * 0.25;
-      const camX = r.x + TILE / 2 - (VIEW_W * TILE) / 2;
-      const camY = r.y + TILE / 2 - (VIEW_H * TILE) / 2;
+      const camX = r.x + TILE / 2 - viewW / 2;
+      const camY = r.y + TILE / 2 - viewH / 2;
       const now = Date.now();
 
       const pr = Math.hypot(p.x, p.y);
       ctx.fillStyle = pr > w.radius - 24 ? "#7ec3ea" : biome(pr / w.radius).sky;
-      ctx.fillRect(0, 0, VIEW_W * TILE, VIEW_H * TILE);
+      ctx.fillRect(0, 0, viewW, viewH);
 
       // sun in the sky, radially outward from the center
       if (pr > 4) {
         const ux = p.x / pr, uy = p.y / pr;
         const sx = ux * (w.radius + 34) * TILE - camX;
         const sy = uy * (w.radius + 34) * TILE - camY;
-        if (sx > -60 && sy > -60 && sx < VIEW_W * TILE + 60 && sy < VIEW_H * TILE + 60) {
+        if (sx > -60 && sy > -60 && sx < viewW + 60 && sy < viewH + 60) {
           ctx.fillStyle = "#fff3b0"; ctx.fillRect(sx - 10, sy - 10, 20, 20);
           ctx.fillStyle = "#ffe066"; ctx.fillRect(sx - 8, sy - 8, 16, 16);
           ctx.fillStyle = "#fff9d6"; ctx.fillRect(sx - 5, sy - 6, 10, 10);
@@ -757,8 +767,8 @@ export default function SekaerthGame() {
 
       // tiles
       const x0 = Math.floor(camX / TILE), y0 = Math.floor(camY / TILE);
-      for (let y = y0; y <= y0 + VIEW_H + 1; y++) {
-        for (let x = x0; x <= x0 + VIEW_W + 1; x++) {
+      for (let y = y0; y <= y0 + tileRows + 1; y++) {
+        for (let x = x0; x <= x0 + tileCols + 1; x++) {
           const tt = w.get(x, y);
           if (tt === T.AIR) continue;
           if (tt === T.PENDING) {
@@ -817,7 +827,7 @@ export default function SekaerthGame() {
         ctx.globalCompositeOperation = "lighter";
         for (const h of w.hearths) {
           const hx = h.x * TILE - camX, hy = h.y * TILE - camY;
-          if (hx < -200 || hy < -200 || hx > VIEW_W * TILE + 200 || hy > VIEW_H * TILE + 200) continue;
+          if (hx < -200 || hy < -200 || hx > viewW + 200 || hy > viewH + 200) continue;
           const g = ctx.createRadialGradient(hx + 8, hy + 8, 4, hx + 8, hy + 8, TILE * 7);
           g.addColorStop(0, "rgba(255,150,60,0.26)");
           g.addColorStop(1, "rgba(255,140,50,0)");
@@ -828,7 +838,7 @@ export default function SekaerthGame() {
       }
       for (const h of w.hearths) {
         const hx = h.x * TILE - camX, hy = h.y * TILE - camY;
-        if (hx < -20 || hy < -20 || hx > VIEW_W * TILE + 20 || hy > VIEW_H * TILE + 20) continue;
+        if (hx < -20 || hy < -20 || hx > viewW + 20 || hy > viewH + 20) continue;
         const f = Math.floor(now / 130) % 3;
         ctx.fillStyle = "#ff9f43";
         ctx.fillRect(hx + 5, hy + 7 + (f === 2 ? 1 : 0), 6, 6 - (f === 1 ? 1 : 0));
@@ -871,7 +881,7 @@ export default function SekaerthGame() {
       // Full-screen darkness composited in one offscreen layer. Multiple
       // radial cutouts blend seamlessly - no player-sized rectangular clipping.
       if (fx && pr < w.radius - 24) {
-        const width = VIEW_W * TILE, height = VIEW_H * TILE;
+        const width = viewW, height = viewH;
         const mask = lightingRef.current ?? (lightingRef.current = new LightingMask(width, height));
         const lights = [{ x: px + 8, y: py + 8, radius: TILE * 7, strength: 1 }];
         for (const hearth of w.hearths) {
@@ -893,7 +903,6 @@ export default function SekaerthGame() {
   // ---------- DOM ----------
   const btn =
     "select-none border border-amber-200/30 bg-amber-500/10 px-5 py-2.5 font-mono text-[11px] uppercase tracking-[0.2em] text-amber-100 transition-colors hover:bg-amber-500/30 active:bg-amber-500/50 disabled:opacity-30";
-  const btnSm = btn + " px-3 py-2 text-[10px]";
 
   const goMenu = (m: Phase, from: Phase) => { setMenuFrom(from); setPhase(m); soundRef.current.ui(); };
   const back = () => { soundRef.current.ui(); setPhase(menuFrom === "paused" ? "paused" : "title"); };
@@ -901,11 +910,26 @@ export default function SekaerthGame() {
     if (phase === "play") { void saveRun().catch(() => {}); setPhase("paused"); }
     else if (phase === "paused") setPhase("play");
   };
-  const fullscreen = () => {
+  const fullscreen = async () => {
     try {
-      if (document.fullscreenElement) void document.exitFullscreen();
-      else void document.documentElement.requestFullscreen();
-    } catch { /* ignore */ }
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      const stage = stageRef.current;
+      if (!stage?.requestFullscreen) {
+        say("FULLSCREEN ISN'T AVAILABLE IN THIS BROWSER");
+        return;
+      }
+      // A user gesture is required by browsers. Only lock orientation if the
+      // device is already landscape, so portrait play remains available.
+      await stage.requestFullscreen({ navigationUI: "hide" });
+      if (window.innerWidth > window.innerHeight && typeof screen.orientation?.lock === "function") {
+        void screen.orientation.lock("landscape").catch(() => {});
+      }
+    } catch {
+      say("FULLSCREEN WAS BLOCKED BY YOUR BROWSER");
+    }
   };
   const fmtTime = (s: number) => {
     const m = Math.floor(s / 60), ss = Math.floor(s % 60);
@@ -913,20 +937,20 @@ export default function SekaerthGame() {
   };
 
   return (
-    <div className="flex h-[100dvh] w-full items-center justify-center overflow-hidden bg-black text-white">
-      <div ref={stageRef} className="relative h-full w-full max-w-[420px] overflow-hidden bg-[#0b0a12]">
+    <div className="seka-game-shell flex h-[100dvh] w-full items-center justify-center overflow-hidden bg-black text-white">
+      <div ref={stageRef} className="seka-game-stage relative h-full w-full overflow-hidden bg-[#0b0a12]">
         <canvas
           ref={canvasRef}
           width={VIEW_W * TILE}
           height={VIEW_H * TILE}
-          className="absolute"
+          className="absolute inset-0 h-full w-full"
           style={{ imageRendering: "pixelated" }}
         />
 
         {/* Sekampfire-inspired translucent wooden HUD plaques. */}
         {phase === "play" && (
-          <div className="pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] z-20 select-none font-mono">
-            <div className="flex gap-1.5">
+          <div className="seka-hud pointer-events-none absolute inset-x-2 top-[max(0.5rem,env(safe-area-inset-top))] z-20 select-none font-mono">
+            <div className="seka-hud-main flex gap-1.5">
               <div className="seka-plaque flex min-w-0 flex-1 items-center justify-between gap-2 px-2.5 py-1.5">
                 <div className="min-w-0">
                   <div className="truncate text-[10px] font-bold tracking-[0.1em] text-amber-100">{hud.biome}</div>
@@ -963,7 +987,7 @@ export default function SekaerthGame() {
                 <span className="mt-1 text-[8px]">MENU</span>
               </button>
             </div>
-            <div className="mt-1.5 grid grid-cols-[1.5fr_0.85fr_0.9fr] gap-1.5">
+            <div className="seka-hud-stats mt-1.5 grid grid-cols-[1.5fr_0.85fr_0.9fr] gap-1.5">
               <div className="seka-plaque min-w-0 px-2 py-1.5">
                 <div className="flex items-center justify-between text-[9px] text-amber-100/80"><span>WARMTH</span><strong className="text-amber-100">{hud.warmth}%</strong></div>
                 <div className="mt-0.5 text-[8px] text-amber-100/65">COLD {hud.cold} · HEAT {hud.heat}</div>
@@ -983,12 +1007,12 @@ export default function SekaerthGame() {
           </div>
         )}
 
-        {phase === 'play' && <div className="pointer-events-none absolute right-3 top-[115px] z-20 font-mono text-[8px] text-amber-100/70">
+        {phase === 'play' && <div className="seka-save-indicator pointer-events-none absolute right-3 top-[115px] z-20 font-mono text-[8px] text-amber-100/70">
           {savingState === 'saving' ? 'SAVING...' : savingState === 'error' ? 'SAVE ERROR' : savingState === 'saved' ? 'SAVED' : ''}
         </div>}
         {/* First five backpack slots form a lightweight, expandable quickbar. */}
         {phase === 'play' && (
-          <div className="pointer-events-auto absolute bottom-[169px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-[3px] rounded-sm border border-amber-200/35 bg-[#20252d]/80 p-1 font-mono">
+          <div className="seka-quickbar pointer-events-auto absolute bottom-[169px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-[3px] rounded-sm border border-amber-200/35 bg-[#20252d]/80 p-1 font-mono">
             {inventoryRef.current.slice(0, HOTBAR_SLOTS).map((stack, index) => (
               <button key={index} type="button" aria-pressed={hotbarSlot===index}
                 aria-label={`Quick slot ${index+1}: ${stack ? `${ITEMS[stack.id].name}, ${stack.count}` : 'Empty'}`}
@@ -1006,7 +1030,7 @@ export default function SekaerthGame() {
             <div
               role="group" aria-label="Touch movement thumbstick: drag to move; optional auto-dig is in settings"
               data-testid="sekaerth-thumbstick"
-              className="pointer-events-auto absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-2 z-20 h-[152px] w-[160px] touch-none select-none"
+              className="seka-stick pointer-events-auto absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-2 z-20 h-[152px] w-[160px] touch-none select-none"
               onPointerDown={stickDown} onPointerMove={stickMove}
               onPointerUp={stickUp} onPointerCancel={stickUp}
               onLostPointerCapture={(event) => { if (stickPointerRef.current === event.pointerId) resetStick(); }}
@@ -1026,7 +1050,7 @@ export default function SekaerthGame() {
               <div className="absolute inset-x-0 bottom-0 text-center font-mono text-[9px] tracking-[0.16em] text-amber-100/70">DRAG TO MOVE</div>
             </div>
 
-            <div className="pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-3 z-20 flex flex-col items-center gap-3 select-none">
+            <div className="seka-actions pointer-events-auto absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-3 z-20 flex flex-col items-center gap-3 select-none">
               <button type="button" onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); startAct(); }}
                 onPointerUp={() => { actHeldRef.current = false; }}
                 onPointerCancel={() => { actHeldRef.current = false; }}
@@ -1057,15 +1081,15 @@ export default function SekaerthGame() {
         {/* Notifications stay clear of both thumbstick and action buttons. */}
         {toast && (
           <div key={toast.id}
-            className="seka-plaque pointer-events-none absolute bottom-[224px] left-1/2 z-30 w-[90%] -translate-x-1/2 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-widest text-amber-100">
+            className="seka-toast seka-plaque pointer-events-none absolute bottom-[224px] left-1/2 z-30 w-[90%] -translate-x-1/2 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-widest text-amber-100">
             {toast.text}
           </div>
         )}
 
         {/* ================= TITLE ================= */}
         {phase === "title" && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 bg-black/70 p-6">
-            <div className="mb-2 text-center">
+          <div className="seka-title absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 overflow-y-auto bg-black/70 p-6>
+            <div className="seka-title-brand mb-2 text-center">
               <div className="animate-pulse">
                 <PixelArt grid={FLAME_GRID} colors={ICON_COLORS} px={5} />
               </div>
@@ -1076,17 +1100,20 @@ export default function SekaerthGame() {
                 DIG TOWARD THE SUN · 1 BLOCK = 1 M
               </p>
             </div>
-            <div className="mt-8 flex flex-col gap-2">
+            <div className="seka-title-actions mt-8 flex flex-col gap-2">
               {!loadingWorlds && hasSave && <button className={btn} onClick={() => { soundRef.current.ensure(); void continueGame(); }}>Continue{savedWorld ? ` - ${WORLD_SIZE_BY_ID[savedWorld].label}` : ""}</button>}
               <button className={btn} disabled={loadingWorlds} onClick={() => { setPhase('worlds'); void refreshWorlds(); }}>My Worlds ({worlds.length})</button>
               <button className={btn} disabled={loadingWorlds || !!storageError} onClick={() => { setSelectedWorld("tiny"); setSelectedName(""); setPhase("world"); soundRef.current.ui(); }}>New Ascent</button>
               <button className={btn} onClick={() => goMenu("howto", "title")}>How to Play</button>
               <button className={btn} onClick={() => goMenu("settings", "title")}>Settings</button>
               <button className={btn} onClick={() => goMenu("credits", "title")}>Credits</button>
+              <button className={btn} onClick={() => void fullscreen()} disabled={!fullscreenAvailable}>
+                {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </button>
             </div>
             {storageError && <p role="alert" className="mt-3 max-w-[290px] text-center font-mono text-[9px] text-rose-200">Storage: {storageError}</p>}
             <p className="mt-8 font-mono text-[8px] uppercase tracking-widest text-white/25">
-              v3.4 · backpack · resource drops · multiworld saves
+              v3.6.2 · mobile landscape · SekaFaji Games
             </p>
           </div>
         )}
@@ -1102,7 +1129,7 @@ export default function SekaerthGame() {
             </button>
             <h2 className="mt-1 font-mono text-lg font-bold uppercase tracking-[0.25em] text-amber-300">Create a World</h2>
             <p className="mt-1 font-mono text-[9px] uppercase tracking-widest text-white/50">CHOOSE YOUR PLANET SIZE</p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="seka-world-picker mt-4 grid grid-cols-2 gap-2">
               {WORLD_SIZES.map((size) => {
                 const active = selectedWorld === size.id;
                 return (
@@ -1199,11 +1226,14 @@ export default function SekaerthGame() {
 
         {/* ================= PAUSE ================= */}
         {phase === "paused" && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-black/75 p-6">
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 overflow-y-auto bg-black/75 p-6>
             <h2 className="mb-4 font-mono text-base uppercase tracking-[0.35em] text-amber-300">Paused</h2>
             <div className="flex flex-col gap-2">
               <button className={btn} onClick={togglePause}>Resume</button>
               <button className={btn} onClick={() => goMenu("settings", "paused")}>Settings</button>
+              <button className={btn} onClick={() => void fullscreen()} disabled={!fullscreenAvailable}>
+                {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </button>
               <button className={btn} onClick={() => goMenu("howto", "paused")}>How to Play</button>
               <button className={btn} onClick={() => {
                 void saveRun().then(() => setPhase('title')).catch(() => say('SAVE FAILED. STAYING IN WORLD.'));
@@ -1214,7 +1244,7 @@ export default function SekaerthGame() {
 
         {/* ================= HOW TO PLAY ================= */}
         {phase === "howto" && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-4 bg-black/85 p-6">
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-4 overflow-y-auto bg-black/85 p-6>
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-amber-300">How to Play</h2>
             <ul className="space-y-1.5 font-mono text-[10px] leading-relaxed text-white/70">
               <li>YOU ARE AT THE CENTER OF A ROUND PLANET.</li>
@@ -1246,7 +1276,7 @@ export default function SekaerthGame() {
 
         {/* ================= SETTINGS ================= */}
         {phase === "settings" && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/85 p-6">
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-3 overflow-y-auto bg-black/85 p-6>
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-amber-300">Settings</h2>
             <div className="flex w-64 flex-col gap-2">
               <button className={btn} onClick={() => setOpts((o) => ({ ...o, fxHigh: !o.fxHigh }))}>
@@ -1269,6 +1299,9 @@ export default function SekaerthGame() {
               </button>
               <button className={btn} onClick={() => setOpts((o) => ({ ...o, autoDig: !o.autoDig }))}>
                 Auto-Dig: {opts.autoDig ? "On" : "Off"}
+              </button>
+              <button className={btn} onClick={() => void fullscreen()} disabled={!fullscreenAvailable}>
+                Display: {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
               </button>
               <p className="border border-amber-200/15 bg-amber-950/20 p-3 text-[10px] leading-relaxed text-amber-100/70">
                 Your worlds now save separately. Manage or delete them from My Worlds on the main menu.
@@ -1319,12 +1352,6 @@ export default function SekaerthGame() {
           </div>
         )}
 
-        {/* title-screen hint */}
-        {phase === "title" && (
-          <button className={btnSm + " absolute right-2 top-2 z-30 hidden sm:block"} onClick={fullscreen}>
-            ⛶
-          </button>
-        )}
       </div>
     </div>
   );
