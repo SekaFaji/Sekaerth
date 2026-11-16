@@ -1088,7 +1088,7 @@ export default function SekaerthGame() {
 
         {/* ================= TITLE ================= */}
         {phase === "title" && (
-          <div className="seka-title absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 overflow-y-auto bg-black/70 p-6>
+          <div className="seka-title absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 overflow-y-auto bg-black/70 p-6">
             <div className="seka-title-brand mb-2 text-center">
               <div className="animate-pulse">
                 <PixelArt grid={FLAME_GRID} colors={ICON_COLORS} px={5} />
@@ -1226,7 +1226,7 @@ export default function SekaerthGame() {
 
         {/* ================= PAUSE ================= */}
         {phase === "paused" && (
-          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 overflow-y-auto bg-black/75 p-6>
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 overflow-y-auto bg-black/75 p-6">
             <h2 className="mb-4 font-mono text-base uppercase tracking-[0.35em] text-amber-300">Paused</h2>
             <div className="flex flex-col gap-2">
               <button className={btn} onClick={togglePause}>Resume</button>
@@ -1244,7 +1244,7 @@ export default function SekaerthGame() {
 
         {/* ================= HOW TO PLAY ================= */}
         {phase === "howto" && (
-          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-4 overflow-y-auto bg-black/85 p-6>
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-4 overflow-y-auto bg-black/85 p-6">
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-amber-300">How to Play</h2>
             <ul className="space-y-1.5 font-mono text-[10px] leading-relaxed text-white/70">
               <li>YOU ARE AT THE CENTER OF A ROUND PLANET.</li>
@@ -1276,7 +1276,7 @@ export default function SekaerthGame() {
 
         {/* ================= SETTINGS ================= */}
         {phase === "settings" && (
-          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-3 overflow-y-auto bg-black/85 p-6>
+          <div className="seka-menu-overlay absolute inset-0 z-30 flex flex-col items-center justify-start gap-3 overflow-y-auto bg-black/85 p-6">
             <h2 className="font-mono text-xs uppercase tracking-[0.3em] text-amber-300">Settings</h2>
             <div className="flex w-64 flex-col gap-2">
               <button className={btn} onClick={() => setOpts((o) => ({ ...o, fxHigh: !o.fxHigh }))}>
