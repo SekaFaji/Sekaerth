@@ -924,8 +924,9 @@ export default function SekaerthGame() {
       // A user gesture is required by browsers. Only lock orientation if the
       // device is already landscape, so portrait play remains available.
       await stage.requestFullscreen({ navigationUI: "hide" });
-      if (window.innerWidth > window.innerHeight && typeof screen.orientation?.lock === "function") {
-        void screen.orientation.lock("landscape").catch(() => {});
+      const orientation = screen.orientation as unknown as { lock?: (mode: string) => Promise<void> };
+      if (window.innerWidth > window.innerHeight && typeof orientation?.lock === "function") {
+        void orientation.lock("landscape").catch(() => {});
       }
     } catch {
       say("FULLSCREEN WAS BLOCKED BY YOUR BROWSER");
